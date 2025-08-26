@@ -1,0 +1,234 @@
+body {
+    font-family: 'Inter', sans-serif;
+}
+
+/* Loading animations */
+.loading-spinner {
+    border: 4px solid #f3f3f3;
+    border-top: 4px solid #3498db;
+    border-radius: 50%;
+    width: 20px;
+    height: 20px;
+    animation: spin 2s linear infinite;
+}
+
+@keyframes spin {
+    0% { transform: rotate(0deg); }
+    100% { transform: rotate(360deg); }
+}
+
+/* Card hover effects */
+.card-hover {
+    transition: all 0.3s ease;
+}
+
+.card-hover:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 10px 25px rgba(0, 0, 0, 0.1);
+}
+
+/* Platform specific colors */
+.bg-shopee {
+    background-color: #EE4D2D;
+}
+
+.text-shopee {
+    color: #EE4D2D;
+}
+
+.border-shopee {
+    border-color: #EE4D2D;
+}
+
+.bg-lazada {
+    background-color: #0F156D;
+}
+
+.text-lazada {
+    color: #0F156D;
+}
+
+.border-lazada {
+    border-color: #0F156D;
+}
+
+.bg-tiktok {
+    background-color: #FF0050;
+}
+
+.text-tiktok {
+    color: #FF0050;
+}
+
+.border-tiktok {
+    border-color: #FF0050;
+}
+
+/* Status badges */
+.status-connected {
+    background-color: #10B981;
+    color: white;
+}
+
+.status-disconnected {
+    background-color: #EF4444;
+    color: white;
+}
+
+.status-pending {
+    background-color: #F59E0B;
+    color: white;
+}
+
+/* Responsive design improvements */
+@media (max-width: 768px) {
+    .grid-responsive {
+        grid-template-columns: 1fr;
+    }
+    
+    .text-responsive {
+        font-size: 0.875rem;
+    }
+}
+
+/* Chart container */
+.chart-container {
+    position: relative;
+    height: 200px;
+}
+
+/* Custom scrollbar */
+.custom-scrollbar::-webkit-scrollbar {
+    width: 6px;
+}
+
+.custom-scrollbar::-webkit-scrollbar-track {
+    background: #f1f1f1;
+    border-radius: 3px;
+}
+
+.custom-scrollbar::-webkit-scrollbar-thumb {
+    background: #c1c1c1;
+    border-radius: 3px;
+}
+
+.custom-scrollbar::-webkit-scrollbar-thumb:hover {
+    background: #a8a8a8;
+}
+
+/* Notification styles */
+.notification {
+    position: fixed;
+    top: 20px;
+    right: 20px;
+    padding: 1rem;
+    border-radius: 0.5rem;
+    box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+    z-index: 1000;
+    transform: translateX(100%);
+    transition: transform 0.3s ease;
+}
+
+.notification.show {
+    transform: translateX(0);
+}
+
+.notification.success {
+    background-color: #10B981;
+    color: white;
+}
+
+.notification.error {
+    background-color: #EF4444;
+    color: white;
+}
+
+.notification.warning {
+    background-color: #F59E0B;
+    color: white;
+}
+
+/* Table styles */
+.table-hover tbody tr:hover {
+    background-color: rgba(0, 0, 0, 0.02);
+}
+
+/* Button animations */
+.btn-animated {
+    transition: all 0.2s ease;
+}
+
+.btn-animated:hover {
+    transform: translateY(-1px);
+    box-shadow: 0 4px 8px rgba(0, 0, 0, 0.15);
+}
+
+.btn-animated:active {
+    transform: translateY(0);
+}
+
+/* Gradient backgrounds */
+.gradient-shopee {
+    background: linear-gradient(135deg, #EE4D2D 0%, #FF6B47 100%);
+}
+
+.gradient-lazada {
+    background: linear-gradient(135deg, #0F156D 0%, #1A237E 100%);
+}
+
+.gradient-tiktok {
+    background: linear-gradient(135deg, #FF0050 0%, #FF4081 100%);
+}
+
+/* Live indicator animation */
+.live-indicator {
+    animation: pulse 2s infinite;
+}
+
+@keyframes pulse {
+    0% {
+        transform: scale(1);
+        opacity: 1;
+    }
+    50% {
+        transform: scale(1.05);
+        opacity: 0.8;
+    }
+    100% {
+        transform: scale(1);
+        opacity: 1;
+    }
+}
+
+/* Success/Error states */
+.success-border {
+    border-left: 4px solid #10B981;
+}
+
+.error-border {
+    border-left: 4px solid #EF4444;
+}
+
+.warning-border {
+    border-left: 4px solid #F59E0B;
+}
+
+/* Dark mode support (if needed later) */
+@media (prefers-color-scheme: dark) {
+    .dark-mode {
+        background-color: #1a202c;
+        color: #e2e8f0;
+    }
+    
+    .dark-mode .bg-white {
+        background-color: #2d3748;
+    }
+    
+    .dark-mode .text-gray-900 {
+        color: #e2e8f0;
+    }
+    
+    .dark-mode .text-gray-600 {
+        color: #a0aec0;
+    }
+}

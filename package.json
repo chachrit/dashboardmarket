@@ -1,0 +1,33 @@
+{
+  "name": "dashboard-market",
+  "version": "1.0.0",
+  "description": "Real-time sales dashboard for Shopee, Lazada, and TikTok platforms",
+  "main": "index.php",
+  "scripts": {
+    "start": "php -S localhost:8000",
+    "dev": "php -S localhost:8000",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [
+    "dashboard",
+    "sales",
+    "ecommerce",
+    "shopee",
+    "lazada",
+    "tiktok",
+    "realtime",
+    "php"
+  ],
+  "author": "Your Name",
+  "license": "MIT",
+  "dependencies": {},
+  "devDependencies": {},
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/yourusername/dashboard-market.git"
+  },
+  "bugs": {
+    "url": "https://github.com/yourusername/dashboard-market/issues"
+  },
+  "homepage": "https://github.com/yourusername/dashboard-market#readme"
+}
