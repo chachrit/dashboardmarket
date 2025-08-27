@@ -1,24 +1,19 @@
 <?php
-// Get saved settings
+require_once __DIR__ . '/db.php';
+// Load settings from DB (fallback empty if not set yet)
 $settings = [
-    'shopee' => [
-        'partner_id'    => $_COOKIE['shopee_partner_id']    ?? '',
-        'partner_key'   => $_COOKIE['shopee_partner_key']   ?? '',
-        'shop_id'       => $_COOKIE['shopee_shop_id']       ?? '',
-        'access_token'  => $_COOKIE['shopee_access_token']  ?? '',
-        'refresh_token' => $_COOKIE['shopee_refresh_token'] ?? '',
-        'expires_at'    => $_COOKIE['shopee_expires_at']    ?? '',
-        'env'           => $_COOKIE['shopee_env']           ?? 'prod',
-        'enabled'       => isset($_COOKIE['shopee_enabled']) ? $_COOKIE['shopee_enabled'] === 'true' : true,
+    'shopee' => dm_settings_get_all('shopee') + [
+        'partner_id' => '', 'partner_key' => '', 'shop_id' => '',
+        'access_token' => '', 'refresh_token' => '', 'expires_at' => '',
+        'env' => 'prod', 'enabled' => 'true'
     ],
-    'lazada' => [
-        'app_key'       => $_COOKIE['lazada_app_key']       ?? '',
-        'app_secret'    => $_COOKIE['lazada_app_secret']    ?? '',
-        'access_token'  => $_COOKIE['lazada_access_token']  ?? '',
-        'refresh_token' => $_COOKIE['lazada_refresh_token'] ?? '',
-        'expires_in'    => $_COOKIE['lazada_expires_in']    ?? '',
-        'refreshed_at'  => $_COOKIE['lazada_refreshed_at']  ?? '',
-        'enabled'       => isset($_COOKIE['lazada_enabled']) ? $_COOKIE['lazada_enabled'] === 'true' : true,
+    'lazada' => dm_settings_get_all('lazada') + [
+        'app_key' => '', 'app_secret' => '', 'access_token' => '', 'refresh_token' => '',
+        'enabled' => 'true'
+    ],
+    'tiktok' => dm_settings_get_all('tiktok') + [
+        'client_key' => '', 'client_secret' => '', 'access_token' => '', 'refresh_token' => '',
+        'enabled' => 'true'
     ],
 ];
 ?>
@@ -115,11 +110,11 @@ $settings = [
                             </div>
                             <div class="flex items-center space-x-4">
                                 <select id="shopeeEnv" class="px-3 py-2 rounded-lg text-sm text-gray-800">
-                                    <option value="prod" <?php echo ($settings['shopee']['env']==='prod')?'selected':''; ?>>Prod</option>
-                                    <option value="sandbox" <?php echo ($settings['shopee']['env']==='sandbox')?'selected':''; ?>>Sandbox</option>
+                                    <option value="prod" <?php echo (($settings['shopee']['env']??'prod')==='prod')?'selected':''; ?>>Prod</option>
+                                    <option value="sandbox" <?php echo (($settings['shopee']['env']??'prod')==='sandbox')?'selected':''; ?>>Sandbox</option>
                                 </select>
                                 <label class="relative inline-flex items-center cursor-pointer">
-                                    <input type="checkbox" class="sr-only peer" id="shopeeEnabled" <?php echo $settings['shopee']['enabled'] ? 'checked' : ''; ?>>
+                                    <input type="checkbox" class="sr-only peer" id="shopeeEnabled" <?php echo (($settings['shopee']['enabled']??'true')==='true') ? 'checked' : ''; ?>>
                                     <div class="w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-red-300 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-white"></div>
                                     <span class="ml-3 text-white font-medium">เปิด</span>
                                 </label>
@@ -130,37 +125,33 @@ $settings = [
                         <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
                             <div>
                                 <label class="block text-sm font-medium text-gray-700 mb-1">Partner ID</label>
-                                <input type="text" id="shopeePartnerId" value="<?php echo htmlspecialchars($settings['shopee']['partner_id']); ?>" class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-shopee focus:border-shopee" placeholder="Partner ID">
+                                <input type="text" id="shopeePartnerId" value="<?php echo htmlspecialchars($settings['shopee']['partner_id']??''); ?>" class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-shopee focus:border-shopee" placeholder="Partner ID">
                             </div>
                             <div>
                                 <label class="block text-sm font-medium text-gray-700 mb-1">Partner Key (Secret)</label>
-                                <input type="password" id="shopeePartnerKey" value="<?php echo htmlspecialchars($settings['shopee']['partner_key']); ?>" class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-shopee focus:border-shopee" placeholder="Partner Key">
+                                <input type="password" id="shopeePartnerKey" value="<?php echo htmlspecialchars($settings['shopee']['partner_key']??''); ?>" class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-shopee focus:border-shopee" placeholder="Partner Key">
                             </div>
                             <div>
                                 <label class="block text-sm font-medium text-gray-700 mb-1">Shop ID</label>
-                                <input type="text" id="shopeeShopId" value="<?php echo htmlspecialchars($settings['shopee']['shop_id']); ?>" class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-shopee focus:border-shopee" placeholder="Shop ID">
+                                <input type="text" id="shopeeShopId" value="<?php echo htmlspecialchars($settings['shopee']['shop_id']??''); ?>" class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-shopee focus:border-shopee" placeholder="Shop ID">
                             </div>
                             <div class="md:col-span-2">
                                 <label class="block text-sm font-medium text-gray-700 mb-1">Access Token</label>
-                                <input type="text" id="shopeeAccessToken" value="<?php echo htmlspecialchars($settings['shopee']['access_token']); ?>" class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-shopee focus:border-shopee" placeholder="Access Token">
+                                <input type="text" id="shopeeAccessToken" value="<?php echo htmlspecialchars($settings['shopee']['access_token']??''); ?>" class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-shopee focus:border-shopee" placeholder="Access Token">
                             </div>
                             <div>
                                 <label class="block text-sm font-medium text-gray-700 mb-1">Refresh Token</label>
-                                <input type="text" id="shopeeRefreshToken" value="<?php echo htmlspecialchars($settings['shopee']['refresh_token']); ?>" class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-shopee focus:border-shopee" placeholder="Refresh Token">
+                                <input type="text" id="shopeeRefreshToken" value="<?php echo htmlspecialchars($settings['shopee']['refresh_token']??''); ?>" class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-shopee focus:border-shopee" placeholder="Refresh Token">
                             </div>
                             <div>
-                                <label class="block text-sm font-medium text-gray-700 mb-1">Expires At (Epoch)</label>
-                                <input type="text" id="shopeeExpiresAt" value="<?php echo htmlspecialchars($settings['shopee']['expires_at']); ?>" class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-shopee focus:border-shopee" placeholder="เช่น <?php echo time()+14400; ?>">
-                                <p class="text-xs text-gray-500 mt-1" id="shopeeExpiryHuman"></p>
-                            </div>
-                            <div class="md:col-span-2">
-                                <label class="block text-sm font-medium text-gray-700 mb-1">Quick JSON Response Paste (optional)</label>
-                                <textarea id="shopeeTokenJson" class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-shopee focus:border-shopee h-24" placeholder='วาง JSON จาก refresh เช่น {"access_token":"...","refresh_token":"...","expire_in":14399}'></textarea>
-                                <button type="button" onclick="parseShopeeTokenJson()" class="mt-2 text-xs bg-gray-200 hover:bg-gray-300 px-2 py-1 rounded">Parse JSON</button>
+                                <label class="block text-sm font-medium text-gray-700 mb-1">Expires At (timestamp)</label>
+                                <input type="text" id="shopeeExpiresAt" value="<?php echo htmlspecialchars($settings['shopee']['expires_at']??''); ?>" class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-shopee focus:border-shopee" placeholder="Expires At (Unix timestamp)">
+                                <div class="text-xs text-gray-500 mt-1">ตัวอย่าง: 1720000000 (เวลาหมดอายุ access_token)</div>
                             </div>
                         </div>
                         <div class="mt-6 flex flex-wrap gap-3">
                             <button onclick="testConnection('shopee')" class="bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 text-sm"><i class="fas fa-plug mr-2"></i>ทดสอบ</button>
+                            <button onclick="refreshShopeeToken()" class="bg-yellow-500 text-white px-4 py-2 rounded-lg hover:bg-yellow-600 text-sm"><i class="fas fa-sync-alt mr-2"></i>รีเฟรช Token</button>
                             <button onclick="saveSettings('shopee')" class="bg-shopee text-white px-4 py-2 rounded-lg hover:bg-red-600 text-sm"><i class="fas fa-save mr-2"></i>บันทึก</button>
                         </div>
                     </div>
@@ -178,7 +169,7 @@ $settings = [
                                 </div>
                             </div>
                             <label class="relative inline-flex items-center cursor-pointer">
-                                <input type="checkbox" class="sr-only peer" id="lazadaEnabled" <?php echo $settings['lazada']['enabled'] ? 'checked' : ''; ?>>
+                                <input type="checkbox" class="sr-only peer" id="lazadaEnabled" <?php echo (($settings['lazada']['enabled']??'true')==='true') ? 'checked' : ''; ?>>
                                 <div class="w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-blue-300 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-white"></div>
                                 <span class="ml-3 text-white font-medium">เปิด</span>
                             </label>
@@ -188,39 +179,88 @@ $settings = [
                         <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
                             <div>
                                 <label class="block text-sm font-medium text-gray-700 mb-1">App Key</label>
-                                <input type="text" id="lazadaAppKey" value="<?php echo htmlspecialchars($settings['lazada']['app_key']); ?>" class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-lazada focus:border-lazada" placeholder="App Key">
+                                <input type="text" id="lazadaAppKey" value="<?php echo htmlspecialchars($settings['lazada']['app_key']??''); ?>" class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-lazada focus:border-lazada" placeholder="App Key">
                             </div>
                             <div>
                                 <label class="block text-sm font-medium text-gray-700 mb-1">App Secret</label>
-                                <input type="password" id="lazadaAppSecret" value="<?php echo htmlspecialchars($settings['lazada']['app_secret']); ?>" class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-lazada focus:border-lazada" placeholder="App Secret">
+                                <input type="password" id="lazadaAppSecret" value="<?php echo htmlspecialchars($settings['lazada']['app_secret']??''); ?>" class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-lazada focus:border-lazada" placeholder="App Secret">
                             </div>
                             <div>
                                 <label class="block text-sm font-medium text-gray-700 mb-1">Access Token</label>
-                                <input type="text" id="lazadaAccessToken" value="<?php echo htmlspecialchars($settings['lazada']['access_token']); ?>" class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-lazada focus:border-lazada" placeholder="Access Token (auto after OAuth)">
+                                <input type="text" id="lazadaAccessToken" value="<?php echo htmlspecialchars($settings['lazada']['access_token']??''); ?>" class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-lazada focus:border-lazada" placeholder="Access Token (auto after OAuth)">
                             </div>
                             <div>
                                 <label class="block text-sm font-medium text-gray-700 mb-1">Refresh Token</label>
-                                <input type="text" id="lazadaRefreshToken" value="<?php echo htmlspecialchars($settings['lazada']['refresh_token']); ?>" class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-lazada focus:border-lazada" placeholder="Refresh Token">
+                                <input type="text" id="lazadaRefreshToken" value="<?php echo htmlspecialchars($settings['lazada']['refresh_token']??''); ?>" class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-lazada focus:border-lazada" placeholder="Refresh Token">
                             </div>
                             <div>
-                                <label class="block text-sm font-medium text-gray-700 mb-1">Expires In (sec)</label>
-                                <input type="text" id="lazadaExpiresIn" value="<?php echo htmlspecialchars($settings['lazada']['expires_in']); ?>" class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-lazada focus:border-lazada" placeholder="เช่น 3600">
-                            </div>
-                            <div>
-                                <label class="block text-sm font-medium text-gray-700 mb-1">Refreshed At (epoch)</label>
-                                <input type="text" id="lazadaRefreshedAt" value="<?php echo htmlspecialchars($settings['lazada']['refreshed_at']); ?>" class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-lazada focus:border-lazada" placeholder="<?php echo time(); ?>">
-                                <p class="text-xs text-gray-500 mt-1" id="lazadaExpiryHuman"></p>
+                                <label class="block text-sm font-medium text-gray-700 mb-1">Expires At (timestamp)</label>
+                                <input type="text" id="lazadaExpiresAt" value="<?php echo htmlspecialchars($settings['lazada']['expires_at']??''); ?>" class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-lazada focus:border-lazada" placeholder="Expires At (Unix timestamp)">
+                                <div class="text-xs text-gray-500 mt-1">ตัวอย่าง: 1720000000 (เวลาหมดอายุ access_token)</div>
                             </div>
                         </div>
                         <div class="flex flex-wrap gap-3 items-center">
-                            <input type="text" id="lazadaRedirectUri" class="px-3 py-2 border rounded-lg text-sm w-full md:w-1/2" placeholder="Redirect URI สำหรับ OAuth (เช่น https://yourdomain.com/settings.php)">
-                            <button onclick="getLazadaAuthUrl()" class="bg-indigo-600 text-white px-4 py-2 rounded-lg hover:bg-indigo-700 text-sm"><i class="fas fa-link mr-2"></i>Get Auth URL</button>
-                            <button onclick="exchangeLazadaCode()" class="bg-purple-600 text-white px-4 py-2 rounded-lg hover:bg-purple-700 text-sm"><i class="fas fa-exchange-alt mr-2"></i>Exchange Code</button>
-                            <input type="text" id="lazadaAuthCode" class="px-3 py-2 border rounded-lg text-sm w-full md:w-1/3" placeholder="วาง code ที่ได้หลัง redirect">
+                            <!-- Redirect URI and Auth Code inputs removed per UI change -->
                         </div>
                         <div class="flex flex-wrap gap-3 mt-2">
                             <button onclick="testConnection('lazada')" class="bg-green-600 text-white px-4 py-2 rounded-lg hover:bg-green-700 text-sm"><i class="fas fa-plug mr-2"></i>ทดสอบ</button>
                             <button onclick="saveSettings('lazada')" class="bg-lazada text-white px-4 py-2 rounded-lg hover:bg-blue-800 text-sm"><i class="fas fa-save mr-2"></i>บันทึก</button>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- TikTok Settings (new) -->
+                <div class="platform-card bg-white/70 backdrop-blur-lg rounded-2xl shadow-2xl overflow-hidden animate-scaleIn border border-white/20 mt-8">
+                    <div class="bg-gradient-to-r from-[#25F4EE] to-[#FE2C55] p-8">
+                        <div class="flex items-center justify-between">
+                            <div class="flex items-center text-white">
+                                <div class="w-16 h-16 bg-white/20 rounded-2xl flex items-center justify-center mr-6 animate-float">
+                                    <i class="fab fa-tiktok text-3xl"></i>
+                                </div>
+                                <div>
+                                    <h2 class="text-3xl font-bold mb-2">TikTok</h2>
+                                    <p class="text-white/80 text-sm">ตั้งค่า TikTok for Business / OAuth</p>
+                                </div>
+                            </div>
+                            <div class="flex items-center space-x-4">
+                                <label class="relative inline-flex items-center cursor-pointer">
+                                    <input type="checkbox" class="sr-only peer" id="tiktokEnabled" <?php echo (($settings['tiktok']['enabled']??'true')==='true') ? 'checked' : ''; ?>>
+                                    <div class="w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-pink-300 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-white"></div>
+                                    <span class="ml-3 text-white font-medium">เปิด</span>
+                                </label>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="p-6">
+                        <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
+                            <div>
+                                <label class="block text-sm font-medium text-gray-700 mb-1">Client Key</label>
+                                <input type="text" id="tiktokClientKey" value="<?php echo htmlspecialchars($settings['tiktok']['client_key']??''); ?>" class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-pink-400 focus:border-pink-400" placeholder="Client Key">
+                            </div>
+                            <div>
+                                <label class="block text-sm font-medium text-gray-700 mb-1">Client Secret</label>
+                                <input type="password" id="tiktokClientSecret" value="<?php echo htmlspecialchars($settings['tiktok']['client_secret']??''); ?>" class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-pink-400 focus:border-pink-400" placeholder="Client Secret">
+                            </div>
+                            <div>
+                                <label class="block text-sm font-medium text-gray-700 mb-1">Access Token</label>
+                                <input type="text" id="tiktokAccessToken" value="<?php echo htmlspecialchars($settings['tiktok']['access_token']??''); ?>" class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-pink-400 focus:border-pink-400" placeholder="Access Token (auto after OAuth)">
+                            </div>
+                            <div>
+                                <label class="block text-sm font-medium text-gray-700 mb-1">Refresh Token</label>
+                                <input type="text" id="tiktokRefreshToken" value="<?php echo htmlspecialchars($settings['tiktok']['refresh_token']??''); ?>" class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-pink-400 focus:border-pink-400" placeholder="Refresh Token">
+                            </div>
+                            <div>
+                                <label class="block text-sm font-medium text-gray-700 mb-1">Expires At (timestamp)</label>
+                                <input type="text" id="tiktokExpiresAt" value="<?php echo htmlspecialchars($settings['tiktok']['expires_at']??''); ?>" class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-pink-400 focus:border-pink-400" placeholder="Expires At (Unix timestamp)">
+                                <div class="text-xs text-gray-500 mt-1">ตัวอย่าง: 1720000000 (เวลาหมดอายุ access_token)</div>
+                            </div>
+                        </div>
+                        <div class="flex flex-wrap gap-3 items-center mt-4">
+                            <!-- Redirect URI and Auth Code inputs removed -->
+                        </div>
+                        <div class="flex flex-wrap gap-3 mt-2">
+                            <button onclick="testConnection('tiktok')" class="bg-green-600 text-white px-4 py-2 rounded-lg hover:bg-green-700 text-sm"><i class="fas fa-plug mr-2"></i>ทดสอบ</button>
+                            <button onclick="saveSettings('tiktok')" class="bg-pink-500 text-white px-4 py-2 rounded-lg hover:bg-pink-600 text-sm"><i class="fas fa-save mr-2"></i>บันทึก</button>
                         </div>
                     </div>
                 </div>
@@ -259,66 +299,30 @@ $settings = [
                     app_secret:document.getElementById('lazadaAppSecret').value.trim(),
                     access_token:document.getElementById('lazadaAccessToken').value.trim(),
                     refresh_token:document.getElementById('lazadaRefreshToken').value.trim(),
-                    expires_in:document.getElementById('lazadaExpiresIn').value.trim(),
-                    refreshed_at:document.getElementById('lazadaRefreshedAt').value.trim(),
+                    expires_at:document.getElementById('lazadaExpiresAt').value.trim(),
                     enabled:document.getElementById('lazadaEnabled').checked
                 };
+            } else if(platform==='tiktok'){
+                settings={
+                    client_key:document.getElementById('tiktokClientKey').value.trim(),
+                    client_secret:document.getElementById('tiktokClientSecret').value.trim(),
+                    access_token:document.getElementById('tiktokAccessToken').value.trim(),
+                    refresh_token:document.getElementById('tiktokRefreshToken').value.trim(),
+                    expires_at:document.getElementById('tiktokExpiresAt').value.trim(),
+                    enabled:document.getElementById('tiktokEnabled').checked
+                };
             }
-            Object.keys(settings).forEach(k=>{ document.cookie = `${platform}_${k}=${encodeURIComponent(settings[k])}; path=/; max-age=31536000`; });
-            showMessage(`บันทึก ${platform} เรียบร้อย`, 'success');
-            if(platform==='shopee') updateShopeeExpiryHuman();
-            if(platform==='lazada') updateLazadaExpiryHuman();
-        }
-
-        function parseShopeeTokenJson(){
-            try {
-                const txt=document.getElementById('shopeeTokenJson').value.trim(); if(!txt) return;
-                const data=JSON.parse(txt);
-                if(data.access_token) document.getElementById('shopeeAccessToken').value=data.access_token;
-                if(data.refresh_token) document.getElementById('shopeeRefreshToken').value=data.refresh_token;
-                if(data.expire_in){ document.getElementById('shopeeExpiresAt').value = Math.floor(Date.now()/1000)+parseInt(data.expire_in); }
-                saveSettings('shopee');
-            } catch(e){ showMessage('JSON Shopee ไม่ถูกต้อง','error'); }
-        }
-
-        function updateShopeeExpiryHuman(){
-            const el=document.getElementById('shopeeExpiryHuman'); if(!el) return;
-            const v=parseInt(document.getElementById('shopeeExpiresAt').value||'0'); if(!v){ el.textContent=''; return; }
-            const left=v - Math.floor(Date.now()/1000); const d=new Date(v*1000);
-            el.textContent = 'หมดอายุ: '+d.toLocaleString()+' (เหลือ '+left+'s)'; el.className='text-xs '+(left<600?'text-red-600':'text-gray-500');
-        }
-        function updateLazadaExpiryHuman(){
-            const el=document.getElementById('lazadaExpiryHuman'); if(!el) return;
-            const expiresIn=parseInt(document.getElementById('lazadaExpiresIn').value||'0');
-            const refreshedAt=parseInt(document.getElementById('lazadaRefreshedAt').value||'0');
-            if(!expiresIn||!refreshedAt){ el.textContent=''; return; }
-            const exp=refreshedAt + expiresIn; const left=exp - Math.floor(Date.now()/1000); const d=new Date(exp*1000);
-            el.textContent='หมดอายุ: '+d.toLocaleString()+' (เหลือ '+left+'s)'; el.className='text-xs '+(left<600?'text-red-600':'text-gray-500');
-        }
-
-        function getLazadaAuthUrl(){
-            saveSettings('lazada');
-            const redirect=document.getElementById('lazadaRedirectUri').value.trim(); if(!redirect){ showMessage('กรุณาใส่ Redirect URI','error'); return; }
-            fetch(`api.php?action=auth_url&platform=lazada&redirect_uri=${encodeURIComponent(redirect)}`)
-              .then(r=>r.json()).then(j=>{ if(j.success){ window.open(j.auth_url,'_blank'); showMessage('เปิดหน้าขอสิทธิ์แล้ว','success'); } else showMessage('ผิดพลาด: '+(j.error||''),'error'); })
-              .catch(()=>showMessage('เรียก auth_url ล้มเหลว','error'));
-        }
-        function exchangeLazadaCode(){
-            saveSettings('lazada');
-            const redirect=document.getElementById('lazadaRedirectUri').value.trim(); const code=document.getElementById('lazadaAuthCode').value.trim();
-            if(!redirect||!code){ showMessage('กรอก Redirect URI & Code','error'); return; }
-            fetch(`api.php?action=exchange_token&platform=lazada&redirect_uri=${encodeURIComponent(redirect)}&code=${encodeURIComponent(code)}`)
-              .then(r=>r.json()).then(j=>{ if(j.success){
-                  if(j.data){
-                      if(j.data.access_token) document.getElementById('lazadaAccessToken').value=j.data.access_token;
-                      if(j.data.refresh_token) document.getElementById('lazadaRefreshToken').value=j.data.refresh_token;
-                      if(j.data.expires_in) document.getElementById('lazadaExpiresIn').value=j.data.expires_in;
-                      document.getElementById('lazadaRefreshedAt').value=Math.floor(Date.now()/1000);
-                      saveSettings('lazada'); updateLazadaExpiryHuman();
-                  }
-                  showMessage('แลก Code สำเร็จ','success');
-              } else showMessage('แลก Code ล้มเหลว','error'); })
-              .catch(()=>showMessage('Exchange token error','error'));
+            fetch(`api.php?action=save_settings&platform=${platform}`,{
+                method:'POST',
+                headers:{'Content-Type':'application/json'},
+                body:JSON.stringify(settings)
+            }).then(r=>r.json()).then(j=>{
+                if(j.success){
+                    showMessage(`บันทึก ${platform} เรียบร้อย`, 'success');
+                } else {
+                    showMessage(`บันทึก ${platform} ล้มเหลว: ${j.error||j.message}`,'error');
+                }
+            }).catch(()=>showMessage('บันทึกล้มเหลว','error'));
         }
 
         // Override testConnection to ensure saving new fields
@@ -338,16 +342,16 @@ $settings = [
                 animations.playNotificationSound('success');
                 animations.showNotification('กำลังบันทึกการตั้งค่า...', 'info');
             }
-            
             saveSettings('shopee');
-            setTimeout(() => saveSettings('lazada'), 100);
+            setTimeout(() => saveSettings('lazada'), 200);
+            setTimeout(() => saveSettings('tiktok'), 400);
             setTimeout(() => {
                 showMessage('บันทึกการตั้งค่าทั้งหมดเรียบร้อยแล้ว!', 'success');
                 if (animations) {
                     animations.playNotificationSound('success');
                     animations.showNotification('บันทึกเรียบร้อยแล้ว!', 'success');
                 }
-            }, 200);
+            }, 700);
         }
 
         function testAllConnections() {
@@ -359,13 +363,34 @@ $settings = [
             
             testConnection('shopee');
             setTimeout(() => testConnection('lazada'), 2000);
+            setTimeout(() => testConnection('tiktok'), 4000);
+        }
+
+        function refreshShopeeToken(){
+            // Save current settings first so DB is up-to-date
+            saveSettings('shopee');
+            showMessage('กำลังรีเฟรช Token...', 'success');
+            setTimeout(() => {
+                const url = `api.php?action=refresh_token&platform=shopee&env=${document.getElementById('shopeeEnv').value}&partner_id=${encodeURIComponent(document.getElementById('shopeePartnerId').value.trim())}`;
+                fetch(url)
+                    .then r => r.json())
+                    .then(j => {
+                        if (j.success && j.data) {
+                            // Reload inputs from DB by calling a tiny fetch
+                            fetch('api.php?action=curl_info').finally(()=>{
+                                showMessage('รีเฟรช Token สำเร็จ', 'success');
+                            });
+                        } else {
+                            showMessage('รีเฟรชล้มเหลว: '+(j.error||j.message||'ไม่ทราบสาเหตุ'),'error');
+                        }
+                    })
+                    .catch(()=>{ showMessage('รีเฟรชล้มเหลว','error'); });
+            }, 300);
         }
 
         function goBack() {
             window.location.href = 'index.php';
         }
-
-        document.addEventListener('DOMContentLoaded',()=>{ updateShopeeExpiryHuman(); updateLazadaExpiryHuman(); });
 
         // Initialize animations on page load
         let animations;

@@ -150,7 +150,17 @@ $useMock = isset($_GET['use_mock']) && $_GET['use_mock']=='1';
                         <h3 class="text-2xl font-bold bg-gradient-to-r from-gray-700 to-gray-900 bg-clip-text text-transparent">รายการคำสั่งซื้อล่าสุด</h3>
                         <div class="flex items-center space-x-2">
                             <div class="w-3 h-3 bg-green-500 rounded-full animate-pulse"></div>
-                            <span class="text-green-600 text-sm font-medium">10 รายการ</span>
+                            <div class="flex items-center space-x-2">
+                                <label for="recentLimitSelect" class="text-gray-500 text-sm">จำนวน</label>
+                                <select id="recentLimitSelect" onchange="onRecentLimitChange(this.value)" class="text-sm bg-white/80 border border-gray-200 rounded-md px-2 py-1">
+                                    <option value="10">10</option>
+                                    <option value="20">20</option>
+                                    <option value="30">30</option>
+                                    <option value="40">40</option>
+                                    <option value="50">50</option>
+                                </select>
+                                <span id="recentCountLabel" class="text-green-600 text-sm font-medium">10 รายการ</span>
+                            </div>
                         </div>
                     </div>
                     <div class="overflow-hidden rounded-xl border border-gray-200">
@@ -204,8 +214,9 @@ $useMock = isset($_GET['use_mock']) && $_GET['use_mock']=='1';
         let currentPlatform = '<?php echo $platform; ?>';
         let shopeeEnv = '<?php echo $shopeeEnv; ?>'; // added
         let useMock = <?php echo $useMock? 'true':'false'; ?>;
-        let recentOrderIds = [];
-        let recentOrdersPollingStarted = false;
+    let recentOrderIds = [];
+    let recentOrdersPollingStarted = false;
+    let recentLimit = 10; // number of recent orders to fetch/display
         
         // Initialize on page load
         document.addEventListener('DOMContentLoaded', function() {
@@ -270,7 +281,7 @@ $useMock = isset($_GET['use_mock']) && $_GET['use_mock']=='1';
         }
 
         function loadRecentOrders() {
-            fetch(buildAPIUrl('getOrders','&limit=10'))
+            fetch(buildAPIUrl('getOrders','&limit='+recentLimit))
                 .then(response => response.json())
                 .then(data => {
                     if (data.success && data.data.orders) {
@@ -300,11 +311,40 @@ $useMock = isset($_GET['use_mock']) && $_GET['use_mock']=='1';
         }
 
         function displayRecentOrders(orders) {
+            // Ensure orders are sorted newest -> oldest by created_at before rendering
+            try {
+                orders = (orders || []).slice();
+                orders.sort((a, b) => {
+                    const ta = a.created_at ? new Date(a.created_at).getTime() : 0;
+                    const tb = b.created_at ? new Date(b.created_at).getTime() : 0;
+                    return tb - ta;
+                });
+            } catch (e) {
+                // if parsing fails, continue with original order
+            }
             const tableBody = document.getElementById('recentOrdersTable');
             const previousIds = new Set(recentOrderIds);
             recentOrderIds = orders.map(o => o.order_id);
             tableBody.innerHTML = '';
-            orders.slice(0,10).forEach((order, index) => {
+            function formatCreatedAt(s){
+                if(!s) return '';
+                try{
+                    // If string contains 'T', split date and time and remove timezone offset
+                    if(typeof s === 'string'){
+                        const parts = s.split('T');
+                        if(parts.length>=2){
+                            const datePart = parts[0];
+                            // remove timezone offset like +07:00 or -05:00 or trailing Z
+                            let timePart = parts.slice(1).join('T');
+                            timePart = timePart.split(/\+|\-|Z/)[0];
+                            return `${datePart}<div class="text-xs text-gray-400 mt-1">${timePart}</div>`;
+                        }
+                    }
+                    return s;
+                }catch(e){ return s; }
+            }
+
+            orders.slice(0, recentLimit).forEach((order, index) => {
                 const isNew = !previousIds.has(order.order_id) && previousIds.size > 0; // treat as new only after first load
                 const row = document.createElement('tr');
                 row.className = 'hover:bg-gray-50 transition-colors duration-200 animate-slideInRight';
@@ -319,8 +359,9 @@ $useMock = isset($_GET['use_mock']) && $_GET['use_mock']=='1';
                 } else {
                     productHtml = `<div class="text-gray-600 text-sm">${order.product}</div>`;
                 }
+                const createdDisplay = formatCreatedAt(order.created_at || '');
                 row.innerHTML = `
-                    <td class="py-4 px-6 font-medium text-gray-900 align-top">${order.order_id}<div class="text-xs text-gray-400 mt-1">${order.created_at || ''}</div></td>
+                    <td class="py-4 px-6 font-medium text-gray-900 align-top">${order.order_id}${createdDisplay ? createdDisplay : ''}</td>
                     <td class="py-4 px-6 align-top space-y-1">${productHtml}</td>
                     <td class="py-4 px-6 text-right font-semibold text-<?php echo $platformColor; ?> align-top">₿${(order.amount||0).toLocaleString()}</td>
                 `;
@@ -390,11 +431,21 @@ $useMock = isset($_GET['use_mock']) && $_GET['use_mock']=='1';
             if (recentOrdersPollingStarted) return;
             recentOrdersPollingStarted = true;
             setInterval(()=>{
-                fetch(buildAPIUrl('getOrders','&limit=10'))
+                fetch(buildAPIUrl('getOrders','&limit='+recentLimit))
                     .then(r=>r.json())
                     .then(d=>{ if(d.success && d.data.orders){ displayRecentOrders(d.data.orders); updateTimestamp(); } })
                     .catch(()=>{});
             },15000);
+        }
+
+        function onRecentLimitChange(val){
+            const v = parseInt(val) || 10;
+            recentLimit = v;
+            const label = document.getElementById('recentCountLabel');
+            if(label) label.textContent = `${recentLimit} รายการ`;
+            // reload orders immediately with new limit
+            document.getElementById('recentOrdersTable').innerHTML = '<tr><td colspan="3" class="py-4 px-6 text-center text-gray-400 text-sm">กำลังโหลด...</td></tr>';
+            loadRecentOrders();
         }
 
         function updateTimestamp(){

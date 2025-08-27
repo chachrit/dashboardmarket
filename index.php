@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Dashboard ยอดขาย Realtime</title>
+    <title>Journal Dashboard Realtime</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
     <link href="assets/css/animations.css" rel="stylesheet">
@@ -49,8 +49,8 @@
                             <div class="absolute -top-1 -right-1 w-3 h-3 bg-green-500 rounded-full animate-pulse-slow"></div>
                         </div>
                         <div>
-                            <h1 class="text-3xl font-bold bg-gradient-to-r from-blue-600 to-purple-600 bg-clip-text text-transparent">Dashboard ยอดขาย</h1>
-                            <p class="text-gray-500 text-sm">ระบบติดตามยอดขายแบบเรียลไทม์</p>
+                            <h1 class="text-3xl font-bold bg-gradient-to-r from-blue-600 to-purple-600 bg-clip-text text-transparent">Journal Dashboard</h1>
+                            <p class="text-gray-500 text-sm">Realtime Dashboard</p>
                         </div>
                     </div>
                     <div class="flex items-center space-x-4 animate-fadeIn">
@@ -237,36 +237,7 @@
                     </div>
                 </div>
                 <div class="space-y-4" id="recentActivity">
-                    <div class="activity-item flex items-center justify-between p-4 bg-gradient-to-r from-green-50 to-emerald-50 rounded-xl border border-green-200 animate-slideInRight">
-                        <div class="flex items-center space-x-4">
-                            <div class="w-12 h-12 bg-gradient-to-br from-shopee to-red-600 rounded-full flex items-center justify-center animate-float">
-                                <i class="fab fa-shopify text-white text-lg"></i>
-                            </div>
-                            <div>
-                                <p class="font-semibold text-gray-800">ออเดอร์ใหม่จาก Shopee</p>
-                                <p class="text-gray-600 text-sm">สินค้า: เสื้อยืด Basic • รหัส: #SP001</p>
-                            </div>
-                        </div>
-                        <div class="text-right">
-                            <p class="font-bold text-shopee text-lg">₿890</p>
-                            <p class="text-gray-500 text-sm">2 นาทีที่แล้ว</p>
-                        </div>
-                    </div>
-                    <div class="activity-item flex items-center justify-between p-4 bg-gradient-to-r from-blue-50 to-indigo-50 rounded-xl border border-blue-200 animate-slideInRight" style="animation-delay: 0.1s">
-                        <div class="flex items-center space-x-4">
-                            <div class="w-12 h-12 bg-gradient-to-br from-lazada to-blue-800 rounded-full flex items-center justify-center animate-float">
-                                <i class="fas fa-shopping-bag text-white text-lg"></i>
-                            </div>
-                            <div>
-                                <p class="font-semibold text-gray-800">ออเดอร์ใหม่จาก Lazada</p>
-                                <p class="text-gray-600 text-sm">สินค้า: หูฟัง Wireless • รหัส: #LZ008</p>
-                            </div>
-                        </div>
-                        <div class="text-right">
-                            <p class="font-bold text-lazada text-lg">₿1,250</p>
-                            <p class="text-gray-500 text-sm">5 นาทีที่แล้ว</p>
-                        </div>
-                    </div>
+                    <!-- recent activity will be populated by loadRecentActivity() -->
                 </div>
             </div>
         </main>
@@ -298,14 +269,126 @@
                 animations.createParticleBackground();
             }
 
-            // Load initial data
-            loadAllPlatformsData();
-        });
+            // Hide disabled platforms based on cookies and load initial data
+            const enabledPlatforms = [];
+            ['shopee','lazada','tiktok'].forEach(p => {
+                const c = document.cookie.split(';').map(s=>s.trim()).find(s=>s.startsWith(`${p}_enabled=`));
+                let enabled = true;
+                if(c){ enabled = c.split('=')[1] === 'true'; }
+                if(!enabled){
+                    // Hide card and zero out numbers
+                    const card = document.querySelector(`#${p}Sales`)?document.querySelector(`#${p}Sales`).closest('.platform-card'):null;
+                    if(card) card.style.display = 'none';
+                    const statusEl = document.querySelector(`#${p}Sales`)?.closest('.platform-card')?.querySelector('.status-badge');
+                    if(statusEl){ statusEl.textContent = 'ปิดการใช้งาน'; statusEl.className='status-badge px-3 py-1 bg-gray-100 text-gray-600 rounded-full text-xs border border-gray-200'; }
+                } else {
+                    enabledPlatforms.push(p);
+                }
+            });
 
-        function loadAllPlatformsData() {
-            const platforms = ['shopee', 'lazada', 'tiktok'];
+            loadAllPlatformsData(enabledPlatforms);
+            // Load recent activity from API
+            loadRecentActivity();
+        });
+        
+        function loadRecentActivity() {
+            const container = document.getElementById('recentActivity');
+            container.innerHTML = ''; // clear
+            fetch('api.php?action=getRecentActivity')
+                .then(res => res.json())
+                .then(json => {
+                    if(json.success && Array.isArray(json.data)){
+                        // sort newest first by created_at/time
+                        try{
+                            json.data.sort((a,b)=>{
+                                const ta = new Date(a.created_at || a.time || 0).getTime() || 0;
+                                const tb = new Date(b.created_at || b.time || 0).getTime() || 0;
+                                return tb - ta;
+                            });
+                        }catch(e){}
+                        json.data.forEach((item, idx) => {
+                            const el = renderRecentActivityItem(item);
+                            if(el) container.appendChild(el);
+                        });
+                    } else {
+                        container.innerHTML = '<div class="text-sm text-gray-500">ไม่พบกิจกรรมล่าสุด</div>';
+                    }
+                })
+                .catch(err => {
+                    console.error('Failed to load recent activity', err);
+                    container.innerHTML = '<div class="text-sm text-gray-500">โหลดกิจกรรมล้มเหลว</div>';
+                });
+
+            // refresh periodically
+            if(window._recentActivityTimer) clearTimeout(window._recentActivityTimer);
+            window._recentActivityTimer = setTimeout(loadRecentActivity, 15000);
+        }
+
+        function renderRecentActivityItem(item){
+            // expected order shape: { platform, order_id, items: [{name,quantity}], product, amount, created_at, time }
+            if(!item || !item.platform) return null;
+            const platform = item.platform;
+            const wrapper = document.createElement('div');
+            wrapper.className = 'activity-item flex items-center justify-between p-4 rounded-xl border animate-slideInRight bg-white';
+
+            // build product HTML similar to platform.php
+            let productHtml = '';
+            if(item.items && Array.isArray(item.items) && item.items.length){
+                productHtml = item.items.map(it=>`<div class="text-gray-600 text-sm">${it.name} <span class="text-gray-400">x${it.quantity||1}</span></div>`).join('');
+            } else if(item.product){
+                productHtml = `<div class="text-gray-600 text-sm">${item.product}</div>`;
+            }
+
+            const iconClass = platform==='lazada' ? 'fas fa-shopping-bag' : (platform==='shopee' ? 'fab fa-shopify' : 'fab fa-tiktok');
+            const amountText = item.amount ? `₿${Number(item.amount).toLocaleString()}` : '';
+            const createdAtRaw = item.created_at || item.time || '';
+
+            // format createdAt to remove timezone suffix and show date+time like platform.php
+            function formatCreatedAtForIndex(s){
+                if(!s) return '';
+                try{
+                    if(typeof s === 'string'){
+                        const parts = s.split('T');
+                        if(parts.length>=2){
+                            const datePart = parts[0];
+                            let timePart = parts.slice(1).join('T');
+                            timePart = timePart.split(/\+|\-|Z/)[0];
+                            return `${datePart}<div class="text-xs text-gray-400 mt-1">${timePart}</div>`;
+                        }
+                    }
+                    return s;
+                }catch(e){ return s; }
+            }
+            const createdAt = formatCreatedAtForIndex(createdAtRaw);
+
+            wrapper.innerHTML = `
+                <div class="flex items-center space-x-4">
+                    <div class="w-12 h-12 bg-gradient-to-br from-${platform} to-${platform}-600 rounded-full flex items-center justify-center animate-float">
+                        <i class="${iconClass} text-white text-lg"></i>
+                    </div>
+                    <div>
+                        <p class="font-semibold text-gray-800">${item.order_id || ''}</p>
+                                <div class="text-xs text-gray-400 mt-1">${createdAt}</div>
+                        ${productHtml}
+                    </div>
+                </div>
+                <div class="text-right">
+                    <p class="font-bold text-${platform} text-lg">${amountText}</p>
+                    <p class="text-gray-500 text-sm">${createdAtRaw.split('T')[0] || createdAtRaw}</p>
+                </div>
+            `;
+            return wrapper;
+        }
+
+        function loadAllPlatformsData(platforms = ['shopee', 'lazada', 'tiktok']) {
             let completedRequests = 0;
             
+            if(platforms.length===0){
+                // Nothing to load
+                updateDashboardWithAnimations();
+                return;
+            }
+
             platforms.forEach(platform => {
                 fetch(`api.php?action=getSummary&platform=${platform}`)
                     .then(response => response.json())
@@ -316,19 +399,15 @@
                                 orders: data.data.totalOrders || 0
                             };
                         } else {
-                            console.log(`Using fallback data for ${platform}:`, data.error);
-                            salesData[platform] = {
-                                sales: platform === 'shopee' ? 45000 : platform === 'lazada' ? 38000 : 27000,
-                                orders: platform === 'shopee' ? 125 : platform === 'lazada' ? 98 : 67
-                            };
+                            console.log(`No live data for ${platform}:`, data.error);
+                            // Do not use mock values — set to zero so totals reflect real data only
+                            salesData[platform] = { sales: 0, orders: 0 };
                         }
                     })
                     .catch(error => {
                         console.error(`Failed to load ${platform} data:`, error);
-                        salesData[platform] = {
-                            sales: platform === 'shopee' ? 45000 : platform === 'lazada' ? 38000 : 27000,
-                            orders: platform === 'shopee' ? 125 : platform === 'lazada' ? 98 : 67
-                        };
+                        // On fetch error, don't fill with mock numbers
+                        salesData[platform] = { sales: 0, orders: 0 };
                     })
                     .finally(() => {
                         completedRequests++;
@@ -337,7 +416,7 @@
                         }
                     });
             });
-        }
+         }
 
         function updateDashboardWithAnimations() {
             const totalSales = Object.values(salesData).reduce((sum, platform) => sum + platform.sales, 0);
@@ -349,21 +428,16 @@
                 const previous = previousData[platform];
                 
                 if (current.sales > previous.sales || current.orders > previous.orders) {
-                    // New sale/order detected - play sound and show notification
+                    // New sale/order detected - play sound and show a subtle animation
                     if (animations) {
                         animations.playNotificationSound('newOrder');
-                        animations.showNotification(`ออเดอร์ใหม่จาก ${platform.toUpperCase()}!`, 'success');
-                        
-                        // Add shake animation to platform card
+                        // Add shake animation to platform card only
                         const platformCard = document.querySelector(`#${platform}Sales`).closest('.platform-card');
                         if (platformCard) {
                             platformCard.classList.add('animate-shake');
                             setTimeout(() => platformCard.classList.remove('animate-shake'), 1000);
                         }
                     }
-                    
-                    // Update recent activity
-                    addRecentActivity(platform, current.sales - previous.sales);
                 }
             });
 
@@ -406,40 +480,7 @@
             previousData = JSON.parse(JSON.stringify(salesData));
         }
 
-        function addRecentActivity(platform, amount) {
-            const activityContainer = document.getElementById('recentActivity');
-            const platformNames = { shopee: 'Shopee', lazada: 'Lazada', tiktok: 'TikTok' };
-            const platformIcons = { shopee: 'fab fa-shopify', lazada: 'fas fa-shopping-bag', tiktok: 'fab fa-tiktok' };
-            
-            const activityItem = document.createElement('div');
-            activityItem.className = 'activity-item flex items-center justify-between p-4 bg-gradient-to-r from-yellow-50 to-amber-50 rounded-xl border border-yellow-200 animate-bounceIn';
-            activityItem.innerHTML = `
-                <div class="flex items-center space-x-4">
-                    <div class="w-12 h-12 bg-gradient-to-br from-${platform} to-${platform}-600 rounded-full flex items-center justify-center animate-float">
-                        <i class="${platformIcons[platform]} text-white text-lg"></i>
-                    </div>
-                    <div>
-                        <p class="font-semibold text-gray-800">ออเดอร์ใหม่จาก ${platformNames[platform]}</p>
-                        <p class="text-gray-600 text-sm">เพิ่งอัพเดท • ยอดเพิ่มขึ้น ₿${amount.toLocaleString()}</p>
-                    </div>
-                </div>
-                <div class="text-right">
-                    <p class="font-bold text-${platform} text-lg">+₿${amount.toLocaleString()}</p>
-                    <p class="text-gray-500 text-sm">เมื่อสักครู่</p>
-                </div>
-            `;
-            
-            // Insert at the top
-            activityContainer.insertBefore(activityItem, activityContainer.firstChild);
-            
-            // Remove old items (keep only 5 most recent)
-            const items = activityContainer.querySelectorAll('.activity-item');
-            if (items.length > 5) {
-                for (let i = 5; i < items.length; i++) {
-                    items[i].remove();
-                }
-            }
-        }
+    // Recent activity is populated only from API results; no synthesized "new order" entries
 
         function goToPlatform(platform) {
             window.location.href = `platform.php?p=${platform}`;
@@ -449,28 +490,9 @@
             window.location.href = 'settings.php';
         }
 
-        // Simulate real-time updates with more realistic behavior
-        function simulateRealTimeData() {
-            if (Math.random() > 0.8) {
-                // Occasionally reload from API
-                loadAllPlatformsData();
-            } else {
-                // Simulate incremental updates
-                Object.keys(salesData).forEach(platform => {
-                    if (Math.random() > 0.85) {
-                        const salesIncrease = Math.floor(Math.random() * 1500) + 200;
-                        const ordersIncrease = Math.floor(Math.random() * 3) + 1;
-                        
-                        salesData[platform].sales += salesIncrease;
-                        salesData[platform].orders += ordersIncrease;
-                    }
-                });
-                updateDashboardWithAnimations();
-            }
-        }
+        
 
-        // Auto-update every 10 seconds for more dynamic feel
-        setInterval(simulateRealTimeData, 10000);
+    // No client-side simulation: dashboard reflects only live API results
 
         // Add mouse movement particle effects
         let lastParticleTime = 0;
