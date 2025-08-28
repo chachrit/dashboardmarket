@@ -265,7 +265,7 @@ class PlatformAPI {
     protected $config;
     public function __construct($platform, $config) { $this->platform = $platform; $this->config = $config; }
     // Default stubs
-    public function getOrders($date_from=null,$date_to=null,$limit=999){ throw new Exception('Not implemented for '.$this->platform); } // เพิ่มเป็น 999 สำหรับข้อมูลจริง
+    public function getOrders($date_from=null,$date_to=null,$limit=100){ throw new Exception('Not implemented for '.$this->platform); } // เพิ่มเป็น 100 สำหรับข้อมูลจริง
     public function getProducts($limit=100){ return []; } // เพิ่มจาก 50 เป็น 100
 }
 
@@ -494,7 +494,7 @@ class ShopeeAPI extends PlatformAPI {
         $qs = http_build_query(array_merge($baseParams,$query));
         return $this->httpGet($this->config['api_url'].$path.'?'.$qs);
     }
-    public function getOrders($date_from=null,$date_to=null,$limit=999,$summaryOnly=false){ // เพิ่มเป็น 999 และ summaryOnly
+    public function getOrders($date_from=null,$date_to=null,$limit=100,$summaryOnly=false){ // เพิ่มเป็น 100 และ summaryOnly
         // Convert date range to epoch (Shopee requires unix)
         if(!$date_from || !$date_to){
             $date_from_ts = strtotime(date('Y-m-d 00:00:00')); // today start local
@@ -506,7 +506,7 @@ class ShopeeAPI extends PlatformAPI {
         
         // Calculate optimal pageSize - Shopee max 50 per request, ใช้ batch processing
         $pageSize = min($limit, 50);
-        $batchesNeeded = min(ceil($limit / 50), 40); // จำกัด 40 batches (999 orders max)
+        $batchesNeeded = min(ceil($limit / 50), 40); // จำกัด 40 batches (100 orders max)
         
         // Build query
         $query = [
@@ -519,7 +519,7 @@ class ShopeeAPI extends PlatformAPI {
         $allOrderSnList = [];
         $currentCursor = '';
         
-        // ใช้ pagination เพื่อดึงข้อมูล 999 orders
+        // ใช้ pagination เพื่อดึงข้อมูล 100 orders
         for ($batch = 0; $batch < $batchesNeeded; $batch++) {
             try {
                 if ($batch > 0 && $currentCursor) {
@@ -556,13 +556,13 @@ class ShopeeAPI extends PlatformAPI {
         }
         
         // ถ้าเป็น summary mode ยังต้องดึง order details เพราะ Shopee ไม่มี total_amount ใน order_list
-        // แต่จะใช้ pagination เพื่อดึงข้อมูล 999+ orders อย่างมีประสิทธิภาพ
+        // แต่จะใช้ pagination เพื่อดึงข้อมูล 100+ orders อย่างมีประสิทธิภาพ
         if ($summaryOnly) {
             $totalSales = 0;
             $totalOrders = count($orderSnList);
             $currentCursor = '';
             $pagesProcessed = 0;
-            $maxPages = 40; // จำกัด 40 pages (40 * 50 = 999 orders max)
+            $maxPages = 40; // จำกัด 40 pages (40 * 50 = 100 orders max)
             
             do {
                 // ดึง order details แบบ batch 50 orders per request
@@ -825,7 +825,7 @@ class LazadaAPI extends PlatformAPI {
         $fullUrl = rtrim($this->config['api_url'], '/') . $path;
         return $this->httpGet($fullUrl,$allParams);
     }
-    public function getOrders($date_from=null,$date_to=null,$limit=999,$summaryOnly=false){ // เพิ่มเป็น 999 และ summaryOnly
+    public function getOrders($date_from=null,$date_to=null,$limit=100,$summaryOnly=false){ // เพิ่มเป็น 100 และ summaryOnly
         if(!$date_from || !$date_to){
             // Lazada API ต้องการ ISO 8601 format
             $date_from = date('c', strtotime('-7 days')); // 7 วันที่แล้ว
@@ -961,7 +961,7 @@ class LazadaAPI extends PlatformAPI {
 // TikTok API Wrapper (stub)
 // ------------------------------
 class TikTokAPI extends PlatformAPI {
-    public function getOrders($date_from=null,$date_to=null,$limit=999,$summaryOnly=false){ // เพิ่มเป็น 999 และ summaryOnly
+    public function getOrders($date_from=null,$date_to=null,$limit=100,$summaryOnly=false){ // เพิ่มเป็น 100 และ summaryOnly
         try {
             // สำหรับ TikTok ยังไม่ได้เชื่อมต่อจริง ให้ส่งข้อมูลว่าง
             error_log("[TikTok getOrders] TikTok API not implemented yet, returning empty data");
@@ -1017,18 +1017,18 @@ function handle_request() {
                         $reflection = new ReflectionMethod($api, 'getOrders');
                         $params = $reflection->getParameters();
                         if (count($params) >= 4) {
-                            // Support summaryOnly parameter - ใช้ limit 999 แต่ summaryOnly=true
-                            $summary = $api->getOrders(null, null, 999, true); // summaryOnly = true
+                            // Support summaryOnly parameter - ใช้ limit 100 แต่ summaryOnly=true
+                            $summary = $api->getOrders(null, null, 100, true); // summaryOnly = true
                         } else {
-                            $summary = $api->getOrders(null, null, 999);
+                            $summary = $api->getOrders(null, null, 100);
                         }
                     } else {
-                        $summary = $api->getOrders(null, null, 999);
+                        $summary = $api->getOrders(null, null, 100);
                     }
                 } catch (Exception $e) {
                     // Fallback to standard mode if summary fails
                     error_log("[getSummary] Summary mode failed for $platform, falling back to standard mode: " . $e->getMessage());
-                    $summary = $api->getOrders(null, null, 999);
+                    $summary = $api->getOrders(null, null, 100);
                 }
                 
                 $loadTime = round((microtime(true) - $startTime) * 1000, 2);
