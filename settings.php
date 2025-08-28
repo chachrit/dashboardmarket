@@ -151,6 +151,7 @@ $settings = [
                         </div>
                         <div class="mt-6 flex flex-wrap gap-3">
                             <button onclick="testConnection('shopee')" class="bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 text-sm"><i class="fas fa-plug mr-2"></i>ทดสอบ</button>
+                            <button onclick="generateShopeeAuthURL()" class="bg-orange-500 text-white px-4 py-2 rounded-lg hover:bg-orange-600 text-sm"><i class="fas fa-key mr-2"></i>OAuth Authorization</button>
                             <button onclick="refreshShopeeToken()" class="bg-yellow-500 text-white px-4 py-2 rounded-lg hover:bg-yellow-600 text-sm"><i class="fas fa-sync-alt mr-2"></i>รีเฟรช Token</button>
                             <button onclick="saveSettings('shopee')" class="bg-shopee text-white px-4 py-2 rounded-lg hover:bg-red-600 text-sm"><i class="fas fa-save mr-2"></i>บันทึก</button>
                         </div>
@@ -271,8 +272,18 @@ $settings = [
     <script>
         function showMessage(message, type = 'success') {
             const messageEl = document.getElementById('message');
-            messageEl.className = `mb-6 p-4 rounded-lg ${type === 'success' ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'}`;
-            messageEl.innerHTML = `<i class="fas fa-${type === 'success' ? 'check' : 'exclamation'}-circle mr-2"></i>${message}`;
+            const typeClasses = {
+                success: 'bg-green-100 text-green-800',
+                error: 'bg-red-100 text-red-800',
+                info: 'bg-blue-100 text-blue-800'
+            };
+            const iconClasses = {
+                success: 'fa-check-circle',
+                error: 'fa-exclamation-circle',
+                info: 'fa-info-circle'
+            };
+            messageEl.className = `mb-6 p-4 rounded-lg ${typeClasses[type] || typeClasses['info']} animate-slideInRight`;
+            messageEl.innerHTML = `<i class="fas ${iconClasses[type] || iconClasses['info']} mr-2"></i>${message}`;
             messageEl.classList.remove('hidden');
             
             setTimeout(() => {
@@ -280,112 +291,235 @@ $settings = [
             }, 5000);
         }
 
-        function saveSettings(platform){
-            let settings={};
-            if(platform==='shopee'){
-                settings={
-                    partner_id:document.getElementById('shopeePartnerId').value.trim(),
-                    partner_key:document.getElementById('shopeePartnerKey').value.trim(),
-                    shop_id:document.getElementById('shopeeShopId').value.trim(),
-                    access_token:document.getElementById('shopeeAccessToken').value.trim(),
-                    refresh_token:document.getElementById('shopeeRefreshToken').value.trim(),
-                    expires_at:document.getElementById('shopeeExpiresAt').value.trim(),
-                    env:document.getElementById('shopeeEnv').value,
-                    enabled:document.getElementById('shopeeEnabled').checked
+        function getSettingsFromForm(platform) {
+            if (platform === 'shopee') {
+                return {
+                    partner_id: document.getElementById('shopeePartnerId').value.trim(),
+                    partner_key: document.getElementById('shopeePartnerKey').value.trim(),
+                    shop_id: document.getElementById('shopeeShopId').value.trim(),
+                    access_token: document.getElementById('shopeeAccessToken').value.trim(),
+                    refresh_token: document.getElementById('shopeeRefreshToken').value.trim(),
+                    expires_at: document.getElementById('shopeeExpiresAt').value.trim(),
+                    env: document.getElementById('shopeeEnv').value,
+                    enabled: document.getElementById('shopeeEnabled').checked
                 };
-            } else if(platform==='lazada'){
-                settings={
-                    app_key:document.getElementById('lazadaAppKey').value.trim(),
-                    app_secret:document.getElementById('lazadaAppSecret').value.trim(),
-                    access_token:document.getElementById('lazadaAccessToken').value.trim(),
-                    refresh_token:document.getElementById('lazadaRefreshToken').value.trim(),
-                    expires_at:document.getElementById('lazadaExpiresAt').value.trim(),
-                    enabled:document.getElementById('lazadaEnabled').checked
+            } else if (platform === 'lazada') {
+                return {
+                    app_key: document.getElementById('lazadaAppKey').value.trim(),
+                    app_secret: document.getElementById('lazadaAppSecret').value.trim(),
+                    access_token: document.getElementById('lazadaAccessToken').value.trim(),
+                    refresh_token: document.getElementById('lazadaRefreshToken').value.trim(),
+                    expires_at: document.getElementById('lazadaExpiresAt').value.trim(),
+                    enabled: document.getElementById('lazadaEnabled').checked
                 };
-            } else if(platform==='tiktok'){
-                settings={
-                    client_key:document.getElementById('tiktokClientKey').value.trim(),
-                    client_secret:document.getElementById('tiktokClientSecret').value.trim(),
-                    access_token:document.getElementById('tiktokAccessToken').value.trim(),
-                    refresh_token:document.getElementById('tiktokRefreshToken').value.trim(),
-                    expires_at:document.getElementById('tiktokExpiresAt').value.trim(),
-                    enabled:document.getElementById('tiktokEnabled').checked
+            } else if (platform === 'tiktok') {
+                return {
+                    client_key: document.getElementById('tiktokClientKey').value.trim(),
+                    client_secret: document.getElementById('tiktokClientSecret').value.trim(),
+                    access_token: document.getElementById('tiktokAccessToken').value.trim(),
+                    refresh_token: document.getElementById('tiktokRefreshToken').value.trim(),
+                    expires_at: document.getElementById('tiktokExpiresAt').value.trim(),
+                    enabled: document.getElementById('tiktokEnabled').checked
                 };
             }
-            fetch(`api.php?action=save_settings&platform=${platform}`,{
-                method:'POST',
-                headers:{'Content-Type':'application/json'},
-                body:JSON.stringify(settings)
-            }).then(r=>r.json()).then(j=>{
-                if(j.success){
+            return {};
+        }
+
+        async function saveSettings(platform) {
+            const settings = getSettingsFromForm(platform);
+            try {
+                const response = await fetch(`api.php?action=save_settings&platform=${platform}`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(settings)
+                });
+                
+                if (!response.ok) {
+                    throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+                }
+                
+                const j = await response.json();
+                if (j.success) {
                     showMessage(`บันทึก ${platform} เรียบร้อย`, 'success');
                 } else {
-                    showMessage(`บันทึก ${platform} ล้มเหลว: ${j.error||j.message}`,'error');
+                    showMessage(`บันทึก ${platform} ล้มเหลว: ${j.error || j.message}`, 'error');
                 }
-            }).catch(()=>showMessage('บันทึกล้มเหลว','error'));
-        }
-
-        // Override testConnection to ensure saving new fields
-        function testConnection(platform){
-            showMessage('กำลังทดสอบ '+platform+'...','success');
-            saveSettings(platform);
-            setTimeout(()=>{
-                fetch(`api.php?action=test_connection&platform=${platform}${platform==='shopee'?('&env='+document.getElementById('shopeeEnv').value):''}`)
-                  .then(r=>r.json()).then(j=>{ if(j.success){ showMessage('เชื่อมต่อ '+platform+' OK','success'); } else showMessage('ล้มเหลว: '+(j.error||j.message),'error'); })
-                  .catch(()=>showMessage('ทดสอบล้มเหลว','error'));
-            },500);
-        }
-
-        function saveAllSettings() {
-            const animations = window.animations;
-            if (animations) {
-                animations.playNotificationSound('success');
-                animations.showNotification('กำลังบันทึกการตั้งค่า...', 'info');
+                return j;
+            } catch (err) {
+                console.error('Save settings error:', err);
+                showMessage(`บันทึก ${platform} ล้มเหลว: ${err.message}`, 'error');
+                throw err;
             }
-            saveSettings('shopee');
-            setTimeout(() => saveSettings('lazada'), 200);
-            setTimeout(() => saveSettings('tiktok'), 400);
-            setTimeout(() => {
-                showMessage('บันทึกการตั้งค่าทั้งหมดเรียบร้อยแล้ว!', 'success');
-                if (animations) {
-                    animations.playNotificationSound('success');
-                    animations.showNotification('บันทึกเรียบร้อยแล้ว!', 'success');
-                }
-            }, 700);
         }
 
-        function testAllConnections() {
-            const animations = window.animations;
-            if (animations) {
-                animations.playNotificationSound('newOrder');
-                animations.showNotification('กำลังทดสอบการเชื่อมต่อทั้งหมด...', 'info');
+        function validateCredentials(platform) {
+            if (platform === 'shopee') {
+                const partnerId = document.getElementById('shopeePartnerId').value.trim();
+                const partnerKey = document.getElementById('shopeePartnerKey').value.trim();
+                const shopId = document.getElementById('shopeeShopId').value.trim();
+                const accessToken = document.getElementById('shopeeAccessToken').value.trim();
+                
+                if (!partnerId || !partnerKey || !shopId || !accessToken) {
+                    return 'Shopee: กรุณากรอกข้อมูลให้ครบทุกช่อง (Partner ID, Partner Key, Shop ID, Access Token)';
+                }
+                
+                // Validate partner ID format
+                const partnerIdClean = partnerId.replace(/\D/g, '');
+                if (!partnerIdClean || partnerIdClean.length < 6 || partnerIdClean.length > 15) {
+                    return 'Shopee Partner ID ควรเป็นตัวเลข 6-15 หลัก';
+                }
+            } else if (platform === 'lazada') {
+                const appKey = document.getElementById('lazadaAppKey').value.trim();
+                const appSecret = document.getElementById('lazadaAppSecret').value.trim();
+                // *** ไม่บังคับ Access Token สำหรับการทดสอบ connection
+                
+                if (!appKey || !appSecret) {
+                    return 'Lazada: กรุณากรอก App Key และ App Secret';
+                }
+                
+                // ตรวจสอบ App Key format (Lazada App Key มักจะเป็นตัวเลข 6-8 หลัก)
+                if (appKey.length < 6) {
+                    return 'Lazada App Key ควรมีอย่างน้อย 6 ตัวอักษร';
+                }
+                
+                // ตรวจสอบ App Secret format (ควรมีความยาวพอสมควร)
+                if (appSecret.length < 20) {
+                    return 'Lazada App Secret ควรมีอย่างน้อย 20 ตัวอักษร';
+                }
+            } else if (platform === 'tiktok') {
+                const clientKey = document.getElementById('tiktokClientKey').value.trim();
+                const clientSecret = document.getElementById('tiktokClientSecret').value.trim();
+                
+                if (!clientKey || !clientSecret) {
+                    return 'TikTok: กรุณากรอก Client Key และ Client Secret';
+                }
+            }
+            return null; // No validation errors
+        }
+
+        async function testConnection(platform) {
+            // Validate credentials first
+            const validationError = validateCredentials(platform);
+            if (validationError) {
+                showMessage(validationError, 'error');
+                return;
             }
             
-            testConnection('shopee');
-            setTimeout(() => testConnection('lazada'), 2000);
-            setTimeout(() => testConnection('tiktok'), 4000);
+            showMessage('กำลังทดสอบ ' + platform + '...', 'info');
+            try {
+                await saveSettings(platform);
+                const response = await fetch(`api.php?action=test_connection&platform=${platform}${platform === 'shopee' ? ('&env=' + document.getElementById('shopeeEnv').value) : ''}`);
+                
+                if (!response.ok) {
+                    throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+                }
+                
+                const j = await response.json();
+                if (j.success) {
+                    showMessage(`เชื่อมต่อ ${platform} สำเร็จ: ${j.message || ''}`, 'success');
+                } else {
+                    showMessage(`ทดสอบ ${platform} ล้มเหลว: ${j.error || j.message}`, 'error');
+                }
+            } catch (error) {
+                console.error('Test connection error:', error);
+                showMessage(`ทดสอบ ${platform} ล้มเหลว: ${error.message}`, 'error');
+            }
         }
 
-        function refreshShopeeToken(){
-            // Save current settings first so DB is up-to-date
-            saveSettings('shopee');
-            showMessage('กำลังรีเฟรช Token...', 'success');
-            setTimeout(() => {
+        async function saveAllSettings() {
+            showMessage('กำลังบันทึกการตั้งค่าทั้งหมด...', 'info');
+            try {
+                await saveSettings('shopee');
+                await saveSettings('lazada');
+                await saveSettings('tiktok');
+                showMessage('บันทึกการตั้งค่าทั้งหมดเรียบร้อยแล้ว!', 'success');
+                if (window.animations) {
+                    window.animations.playNotificationSound('success');
+                }
+            } catch (error) {
+                showMessage('เกิดข้อผิดพลาดในการบันทึกบางรายการ', 'error');
+            }
+        }
+
+        async function testAllConnections() {
+            showMessage('กำลังทดสอบการเชื่อมต่อทั้งหมด...', 'info');
+            if (window.animations) {
+                window.animations.playNotificationSound('newOrder');
+            }
+            await testConnection('shopee');
+            await testConnection('lazada');
+            await testConnection('tiktok');
+        }
+
+        async function generateShopeeAuthURL() {
+            try {
+                const partnerId = document.getElementById('shopeePartnerId').value;
+                const partnerKey = document.getElementById('shopeePartnerKey').value;
+                const env = document.getElementById('shopeeEnv').value;
+                
+                if (!partnerId || !partnerKey) {
+                    showMessage('กรุณากรอก Partner ID และ Partner Key ก่อน', 'error');
+                    return;
+                }
+                
+                // Save settings first
+                await saveSettings('shopee');
+                
+                // Generate auth URL
+                const timestamp = Math.floor(Date.now() / 1000);
+                const path = '/api/v2/shop/auth_partner';
+                const currentHost = window.location.protocol + '//' + window.location.host;
+                const redirectUrl = currentHost + window.location.pathname.replace('settings.php', 'shopee_callback.php');
+                
+                const baseUrl = env === 'sandbox' 
+                    ? 'https://openplatform.sandbox.test-stable.shopee.sg'
+                    : 'https://partner.shopeemobile.com';
+                
+                // Create signature (simplified - just timestamp)
+                const baseString = partnerId + path + timestamp;
+                
+                const authUrl = `${baseUrl}${path}?partner_id=${partnerId}&redirect=${encodeURIComponent(redirectUrl)}&timestamp=${timestamp}`;
+                
+                // Show auth URL dialog
+                showMessage(
+                    `กรุณาคลิกลิงก์ด้านล่างเพื่อ authorize:<br>
+                    <a href="${authUrl}" target="_blank" class="text-blue-600 underline break-all">${authUrl}</a><br><br>
+                    <small>หลังจาก authorize สำเร็จ คุณจะถูกนำกลับมาที่หน้าเว็บนี้</small>`,
+                    'info',
+                    15000
+                );
+                
+                // Also open in new tab
+                window.open(authUrl, '_blank');
+                
+            } catch (error) {
+                console.error('Generate auth URL error:', error);
+                showMessage(`สร้าง Authorization URL ล้มเหลว: ${error.message}`, 'error');
+            }
+        }
+
+        async function refreshShopeeToken() {
+            showMessage('กำลังรีเฟรช Token ของ Shopee...', 'info');
+            try {
+                await saveSettings('shopee');
                 const url = `api.php?action=refresh_token&platform=shopee&env=${document.getElementById('shopeeEnv').value}&partner_id=${encodeURIComponent(document.getElementById('shopeePartnerId').value.trim())}`;
-                fetch(url)
-                    .then r => r.json())
-                    .then(j => {
-                        if (j.success && j.data) {
-                            // Reload inputs from DB by calling a tiny fetch
-                            fetch('api.php?action=curl_info').finally(()=>{
-                                showMessage('รีเฟรช Token สำเร็จ', 'success');
-                            });
-                        } else {
-                            showMessage('รีเฟรชล้มเหลว: '+(j.error||j.message||'ไม่ทราบสาเหตุ'),'error');
-                        }
-                    })
-                    .catch(()=>{ showMessage('รีเฟรชล้มเหลว','error'); });
-            }, 300);
+                const response = await fetch(url);
+                
+                if (!response.ok) {
+                    throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+                }
+                
+                const j = await response.json();
+                if (j.success && j.data) {
+                    showMessage('รีเฟรช Token สำเร็จ! กำลังโหลดหน้าใหม่...', 'success');
+                    setTimeout(() => window.location.reload(), 1500);
+                } else {
+                    showMessage('รีเฟรช Token ล้มเหลว: ' + (j.error || j.message || 'ไม่ทราบสาเหตุ'), 'error');
+                }
+            } catch (error) {
+                console.error('Refresh token error:', error);
+                showMessage(`รีเฟรช Token ล้มเหลว: ${error.message}`, 'error');
+            }
         }
 
         function goBack() {

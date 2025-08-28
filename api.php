@@ -1,37 +1,73 @@
 <?php
-// DEBUG: Show all errors for troubleshooting
-ini_set('display_errors', 1);
-ini_set('display_startup_errors', 1);
-error_reporting(E_ALL);
+// Production-ready error handling
+$isProduction = false; // Force development mode for debugging
+
+if ($isProduction) {
+    // Production: Hide errors from output but log them
+    ini_set('display_errors', 0);
+    ini_set('display_startup_errors', 0);
+    ini_set('log_errors', 1);
+    error_reporting(E_ALL);
+} else {
+    // Development: Show all errors
+    ini_set('display_errors', 1);
+    ini_set('display_startup_errors', 1);
+    error_reporting(E_ALL);
+}
+
+// Load config if exists
+$config = [];
+if (file_exists(__DIR__ . '/config.php')) {
+    $config = require __DIR__ . '/config.php';
+}
 
 // Global error/exception handler for JSON API
-set_exception_handler(function($e) {
+set_exception_handler(function($e) use ($isProduction) {
     http_response_code(500);
     header('Content-Type: application/json');
-    echo json_encode([
-        'success' => false,
-        'error' => $e->getMessage(),
-        'file' => $e->getFile(),
-        'line' => $e->getLine(),
-        'trace' => $e->getTraceAsString()
-    ]);
+    
+    if ($isProduction) {
+        // Production: Generic error message
+        echo json_encode([
+            'success' => false,
+            'error' => 'Internal server error',
+            'code' => $e->getCode()
+        ]);
+        // Log detailed error
+        error_log("Dashboard Market Error: " . $e->getMessage() . " in " . $e->getFile() . ":" . $e->getLine());
+    } else {
+        // Development: Detailed error
+        echo json_encode([
+            'success' => false,
+            'error' => $e->getMessage(),
+            'file' => $e->getFile(),
+            'line' => $e->getLine(),
+            'trace' => $e->getTraceAsString()
+        ]);
+    }
     exit;
 });
-set_error_handler(function($errno, $errstr, $errfile, $errline) {
+
+set_error_handler(function($errno, $errstr, $errfile, $errline) use ($isProduction) {
     http_response_code(500);
     header('Content-Type: application/json');
-    echo json_encode([
-        'success' => false,
-        'error' => $errstr,
-        'file' => $errfile,
-        'line' => $errline
-    ]);
+    
+    if ($isProduction) {
+        echo json_encode([
+            'success' => false,
+            'error' => 'Server error occurred'
+        ]);
+        error_log("Dashboard Market Error: $errstr in $errfile:$errline");
+    } else {
+        echo json_encode([
+            'success' => false,
+            'error' => $errstr,
+            'file' => $errfile,
+            'line' => $errline
+        ]);
+    }
     exit;
 });
-// DEBUG: Show all errors for troubleshooting
-ini_set('display_errors', 1);
-ini_set('display_startup_errors', 1);
-error_reporting(E_ALL);
 require_once __DIR__ . '/db.php';
 // Ensure all server-side date/time uses Thailand timezone (UTC+7)
 date_default_timezone_set('Asia/Bangkok');
@@ -109,6 +145,16 @@ function dm_curl_probe_run($url, $resolveHost = null, $resolveIp = null){
     if (defined('CURLOPT_CERTINFO')) { $opts[CURLOPT_CERTINFO] = true; }
     curl_setopt_array($ch, dm_curl_defaults($opts));
     $body = curl_exec($ch);
+    if ($body === false) {
+        $error_msg = curl_error($ch);
+        $http_code = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+        curl_close($ch);
+        return [
+            'http_code' => $http_code,
+            'error' => 'cURL Error: ' . $error_msg,
+            'body_sample' => null
+        ];
+    }
     $info = [
         'http_code' => curl_getinfo($ch, CURLINFO_HTTP_CODE),
         'primary_ip' => curl_getinfo($ch, CURLINFO_PRIMARY_IP),
@@ -207,9 +253,8 @@ function savePlatformTokens($platform, $data) {
     if(isset($data['expire_in'])) dm_settings_set($platform,'expires_at', (string)(time() + (int)$data['expire_in']));
 }
 
-// Backward compatibility for Shopee
+// Backward compatibility
 function saveShopeeTokens($data){ savePlatformTokens('shopee', $data); }
-function saveLazadaTokens($data){ savePlatformTokens('lazada', $data); }
 function saveTikTokTokens($data){ savePlatformTokens('tiktok', $data); }
 
 // ------------------------------
@@ -220,8 +265,8 @@ class PlatformAPI {
     protected $config;
     public function __construct($platform, $config) { $this->platform = $platform; $this->config = $config; }
     // Default stubs
-    public function getOrders($date_from=null,$date_to=null,$limit=50){ throw new Exception('Not implemented for '.$this->platform); }
-    public function getProducts($limit=50){ return []; }
+    public function getOrders($date_from=null,$date_to=null,$limit=999){ throw new Exception('Not implemented for '.$this->platform); } // เพิ่มเป็น 999 สำหรับข้อมูลจริง
+    public function getProducts($limit=100){ return []; } // เพิ่มจาก 50 เป็น 100
 }
 
 // ------------------------------
@@ -242,28 +287,35 @@ class ShopeeAPI extends PlatformAPI {
     public function refreshAccessToken(){
         // Try to refresh access_token using refresh_token if available
         if (empty($this->config['refresh_token'])) throw new Exception('No refresh_token available');
-    // Shopee expects a POST to /api/v2/auth/access_token/get with JSON payload
-    $path = '/api/v2/auth/access_token/get';
-    $urlBase = rtrim($this->config['api_url'], '/') . $path;
-    // Include required query params: partner_id, timestamp and sign (try partner-level sign first)
-    $ts = time();
-    // Clean partner_id: Shopee expects numeric partner_id only. Remove any non-digits.
-    $rawPartner = isset($this->config['partner_id']) ? (string)$this->config['partner_id'] : '';
-    $partnerClean = preg_replace('/\D+/', '', $rawPartner);
-    if (empty($partnerClean)) throw new Exception('No partner_id provided');
-    error_log("[dashboardmarket] Shopee refresh partner_id_clean=".$partnerClean);
-    // Many Shopee auth endpoints expect partner-level sign (no shop_id); try that first.
-    $origPartner = $this->config['partner_id'];
-    $this->config['partner_id'] = $partnerClean;
-    $signNoShop = $this->sign($path, $ts, '', '');
-    $this->config['partner_id'] = $origPartner;
-    // Log signature used (not the secret) to aid debugging
-    error_log("[dashboardmarket] Shopee refresh signNoShop=".$signNoShop);
-    $url = $urlBase . '?partner_id=' . urlencode($partnerClean) . '&timestamp=' . $ts . '&sign=' . $signNoShop;
+        
+        // Shopee expects a POST to /api/v2/auth/access_token/get with JSON payload
+        $path = '/api/v2/auth/access_token/get';
+        $urlBase = rtrim($this->config['api_url'], '/') . $path;
+        // Include required query params: partner_id, timestamp and sign (try partner-level sign first)
+        $ts = time();
+        
+        // Clean partner_id: Shopee expects numeric partner_id only. Remove any non-digits.
+        $rawPartner = isset($this->config['partner_id']) ? (string)$this->config['partner_id'] : '';
+        $partnerClean = preg_replace('/\D+/', '', $rawPartner);
+        if (empty($partnerClean)) throw new Exception('No partner_id provided');
+        
+        // Validate partner_id format (should be 6-15 digits for Shopee - updated range)
+        if (!is_numeric($partnerClean) || strlen($partnerClean) < 6 || strlen($partnerClean) > 15) {
+            throw new Exception('Invalid partner_id format. Shopee requires 6-15 digit number, got: ' . $partnerClean . ' (length: ' . strlen($partnerClean) . ')');
+        }
+        
+        error_log("[dashboardmarket] Shopee refresh partner_id_clean=".$partnerClean);
+        
+        // Many Shopee auth endpoints expect partner-level sign (no shop_id); try that first.
+        $signNoShop = $this->signWithPartnerId($path, $ts, '', '', $partnerClean);
+        
+        // Log signature used (not the secret) to aid debugging
+        error_log("[dashboardmarket] Shopee refresh signNoShop=".$signNoShop);
+        $url = $urlBase . '?partner_id=' . urlencode($partnerClean) . '&timestamp=' . $ts . '&sign=' . $signNoShop;
         $payload = json_encode([
-            'shop_id' => $this->config['shop_id'],
-            'refresh_token' => $this->config['refresh_token'],
-            'partner_id' => $partnerClean
+            'shop_id' => intval($this->config['shop_id']),
+            'partner_id' => intval($partnerClean),
+            'refresh_token' => $this->config['refresh_token']
         ]);
         $ch = curl_init();
         // Debug: log the outgoing refresh request (avoid full tokens in logs)
@@ -303,9 +355,9 @@ class ShopeeAPI extends PlatformAPI {
     if (stripos($errMsg,'sign')!==false || stripos($errMsg,'wrong sign')!==false) {
             error_log("[dashboardmarket] Shopee refresh: wrong sign, retrying with shop-level sign");
             // recompute sign including shop_id
-            $signWithShop = $this->sign($path, $ts, '', $this->config['shop_id']);
+            $signWithShop = $this->signWithPartnerId($path, $ts, '', $this->config['shop_id'], $partnerClean);
             error_log("[dashboardmarket] Shopee refresh signWithShop=".$signWithShop);
-            $url2 = $urlBase . '?partner_id=' . urlencode($this->config['partner_id']) . '&timestamp=' . $ts . '&sign=' . $signWithShop;
+            $url2 = $urlBase . '?partner_id=' . urlencode($partnerClean) . '&timestamp=' . $ts . '&sign=' . $signWithShop;
             // perform second attempt
             $ch2 = curl_init();
             curl_setopt_array($ch2, dm_curl_defaults([
@@ -402,6 +454,13 @@ class ShopeeAPI extends PlatformAPI {
         $base = $this->config['partner_id'].$path.$timestamp.$accessToken.$shopId;
         return hash_hmac('sha256',$base,$this->config['partner_key']);
     }
+    
+    private function signWithPartnerId($path,$timestamp,$accessToken='',$shopId='',$partnerId=''){
+        // base string = partner_id + path + timestamp + access_token + shop_id (shop level)
+        $usePartnerId = $partnerId ?: $this->config['partner_id'];
+        $base = $usePartnerId.$path.$timestamp.$accessToken.$shopId;
+        return hash_hmac('sha256',$base,$this->config['partner_key']);
+    }
     private function httpGet($url){
     $ch=curl_init(); curl_setopt_array($ch, dm_curl_defaults([CURLOPT_URL=>$url, CURLOPT_TIMEOUT=>30]));
         $res=curl_exec($ch); $code=curl_getinfo($ch,CURLINFO_HTTP_CODE); $err=curl_error($ch); curl_close($ch);
@@ -435,518 +494,670 @@ class ShopeeAPI extends PlatformAPI {
         $qs = http_build_query(array_merge($baseParams,$query));
         return $this->httpGet($this->config['api_url'].$path.'?'.$qs);
     }
-    public function getOrders($date_from=null,$date_to=null,$limit=50){
+    public function getOrders($date_from=null,$date_to=null,$limit=999,$summaryOnly=false){ // เพิ่มเป็น 999 และ summaryOnly
         // Convert date range to epoch (Shopee requires unix)
         if(!$date_from || !$date_to){
             $date_from_ts = strtotime(date('Y-m-d 00:00:00')); // today start local
-            $date_to_ts   = time();
+            $date_to_ts = strtotime(date('Y-m-d 23:59:59')); // today end local
         } else {
             $date_from_ts = strtotime($date_from);
-            $date_to_ts   = strtotime($date_to);
+            $date_to_ts = strtotime($date_to);
         }
+        
+        // Calculate optimal pageSize - Shopee max 50 per request, ใช้ batch processing
         $pageSize = min($limit, 50);
-        // Build query (remove invalid order_status=ALL; only include if caller specifies a concrete status)
+        $batchesNeeded = min(ceil($limit / 50), 40); // จำกัด 40 batches (999 orders max)
+        
+        // Build query
         $query = [
             'time_from'=>$date_from_ts,
             'time_to'=>$date_to_ts,
-            'time_range_field'=>'create_time',
             'page_size'=>$pageSize,
-            'response_optional_fields'=>'order_status'
+            'time_range_field'=>'create_time'
         ];
-        if(isset($_GET['order_status']) && $_GET['order_status']!=='' && strtoupper($_GET['order_status'])!=='ALL'){
-            $query['order_status'] = $_GET['order_status'];
+        
+        $allOrderSnList = [];
+        $currentCursor = '';
+        
+        // ใช้ pagination เพื่อดึงข้อมูล 999 orders
+        for ($batch = 0; $batch < $batchesNeeded; $batch++) {
+            try {
+                if ($batch > 0 && $currentCursor) {
+                    $query['cursor'] = $currentCursor;
+                }
+                
+                $resp = $this->callGet('/api/v2/order/get_order_list', $query);
+                $orderSnList = $resp['response']['order_list'] ?? [];
+                
+                if (empty($orderSnList)) break;
+                
+                $allOrderSnList = array_merge($allOrderSnList, $orderSnList);
+                
+                // Check if there are more pages
+                $hasMore = $resp['response']['more'] ?? false;
+                $currentCursor = $resp['response']['next_cursor'] ?? '';
+                
+                if (!$hasMore || !$currentCursor) break;
+                
+                // หยุดถ้าได้ครบตามที่ต้องการแล้ว
+                if (count($allOrderSnList) >= $limit) {
+                    $allOrderSnList = array_slice($allOrderSnList, 0, $limit);
+                    break;
+                }
+                
+            } catch (Exception $e) {
+                error_log("[Shopee getOrders] Batch $batch failed: " . $e->getMessage());
+                break;
+            }
         }
-        $listResp = $this->callGet('/api/v2/order/get_order_list',$query);
-        $orderSnList = $listResp['response']['order_list'] ?? [];
-        if(!$orderSnList) return ['total_sales'=>0,'total_orders'=>0,'orders'=>[]];
-        // Ensure we request details for the most recently created orders first
+        
+        if (empty($allOrderSnList)) {
+            return ['total_sales'=>0,'total_orders'=>0,'orders'=>[]];
+        }
+        
+        // ถ้าเป็น summary mode ยังต้องดึง order details เพราะ Shopee ไม่มี total_amount ใน order_list
+        // แต่จะใช้ pagination เพื่อดึงข้อมูล 999+ orders อย่างมีประสิทธิภาพ
+        if ($summaryOnly) {
+            $totalSales = 0;
+            $totalOrders = count($orderSnList);
+            $currentCursor = '';
+            $pagesProcessed = 0;
+            $maxPages = 40; // จำกัด 40 pages (40 * 50 = 999 orders max)
+            
+            do {
+                // ดึง order details แบบ batch 50 orders per request
+                $sns = array_slice(array_map(fn($o)=>$o['order_sn'],$orderSnList), $pagesProcessed * 50, 50);
+                if (empty($sns)) break;
+                
+                try {
+                    $detailResp = $this->callGet('/api/v2/order/get_order_detail',[
+                        'order_sn_list'=>implode(',',$sns),
+                        'response_optional_fields'=>'total_amount' // เอาแค่ total_amount เพื่อความเร็ว
+                    ]);
+                    
+                    $details = $detailResp['response']['order_list'] ?? [];
+                    foreach($details as $order) {
+                        $totalSales += (float)($order['total_amount'] ?? 0);
+                    }
+                    
+                } catch (Exception $e) {
+                    error_log("[Shopee getOrders] Summary mode batch failed: " . $e->getMessage());
+                    break;
+                }
+                
+                $pagesProcessed++;
+                
+                // ถ้ามี orders เพิ่มเติม ดึงต่อ
+                if (count($orderSnList) > ($pagesProcessed * 50) && $pagesProcessed < $maxPages) {
+                    // มี orders เหลือ ดึงหน้าถัดไป
+                    try {
+                        $nextPageResp = $this->callGet('/api/v2/order/get_order_list', [
+                            'time_range_field' => 'create_time',
+                            'time_from' => $date_from_ts,
+                            'time_to' => $date_to_ts,
+                            'page_size' => 50,
+                            'cursor' => $currentCursor
+                        ]);
+                        
+                        $nextOrders = $nextPageResp['response']['order_list'] ?? [];
+                        $currentCursor = $nextPageResp['response']['more'] ? ($nextPageResp['response']['next_cursor'] ?? '') : '';
+                        
+                        if (!empty($nextOrders)) {
+                            $orderSnList = array_merge($orderSnList, $nextOrders);
+                            $totalOrders = count($orderSnList);
+                        }
+                        
+                        if (!$hasMore || !$currentCursor) break;
+                        
+                    } catch (Exception $e) {
+                        error_log("[Shopee getOrders] Summary pagination failed: " . $e->getMessage());
+                        break;
+                    }
+                }
+                
+            } while ($hasMore && $currentCursor && $pagesProcessed < $maxPages);
+            
+            error_log("[Shopee getOrders] Summary mode: Orders=$totalOrders, Sales=$totalSales, Pages processed: $pagesProcessed");
+            return ['total_sales'=>$totalSales,'total_orders'=>$totalOrders,'orders'=>[]];
+        }
+        
+        // Full mode - ดึงรายละเอียด order (จำกัดเฉพาะที่จำเป็นเพื่อความเร็ว)
+        $sns = array_map(fn($o)=>$o['order_sn'], array_slice($allOrderSnList, 0, min(200, count($allOrderSnList)))); // จำกัด 200 orders สำหรับ full mode
+        
         try {
-            usort($orderSnList, function($a,$b){
-                $ta = isset($a['create_time']) ? (int)$a['create_time'] : 0;
-                $tb = isset($b['create_time']) ? (int)$b['create_time'] : 0;
-                return $tb <=> $ta; // newest first
-            });
-        } catch (Exception $e) { /* ignore sort errors */ }
-        $sns = array_map(fn($o)=>$o['order_sn'],$orderSnList);
-        $snChunk = array_slice($sns,0,$pageSize);
-        $detailResp = $this->callGet('/api/v2/order/get_order_detail',[
-            'order_sn_list'=>implode(',',$snChunk),
-            'response_optional_fields'=>'item_list,total_amount,order_status,create_time'
-        ]);
+            $detailResp = $this->callGet('/api/v2/order/get_order_detail',[
+                'order_sn_list'=>implode(',',$sns),
+                'response_optional_fields'=>'item_list,total_amount,order_status,create_time'
+            ]);
+        } catch (Exception $e) {
+            error_log("[Shopee getOrders] Failed to get order details: " . $e->getMessage());
+            throw $e;
+        }
+        
         $details = $detailResp['response']['order_list'] ?? [];
         $out=[]; $totalSales=0; $totalOrders=0;
         foreach($details as $o){
-            $orderSn = $o['order_sn'] ?? 'N/A';
-            $created = '';
-            if (isset($o['create_time'])) {
-                try {
-                    // create DateTime from epoch (UTC) then convert to Bangkok timezone
-                    $dt = new DateTime('@' . $o['create_time']);
-                    $dt->setTimezone(new DateTimeZone('Asia/Bangkok'));
-                    $created = $dt->format('Y-m-d\TH:i:sP'); // ISO8601 with +07:00
-                } catch (Exception $e) {
-                    $created = date('Y-m-d H:i:s', $o['create_time']);
+            $items = [];
+            if(isset($o['item_list']) && is_array($o['item_list'])){
+                foreach($o['item_list'] as $item){
+                    $items[] = [
+                        'name' => $item['item_name'] ?? 'N/A',
+                        'quantity' => $item['model_quantity_purchased'] ?? 1
+                    ];
                 }
             }
-            $status  = $o['order_status'] ?? 'UNKNOWN';
-            $items = $o['item_list'] ?? [];
-            $amount = 0;
-            foreach($items as $it){
-                $qty = (int)($it['model_quantity_purchased'] ?? $it['model_quantity'] ?? $it['quantity'] ?? 1);
-                $price = (float)($it['model_discounted_price'] ?? $it['model_original_price'] ?? $it['item_price'] ?? 0);
-                $amount += $price * $qty;
-            }
-            if(!$amount && isset($o['total_amount'])) $amount = (float)$o['total_amount'];
-            $totalSales += $amount; $totalOrders++;
             $out[] = [
-                'id'=>$orderSn,
-                'product'=>'รายการสินค้า '.count($items).' รายการ',
-                'amount'=>$amount,
-                'status'=>strtolower($status),
-                'created_at'=>$created
+                'platform' => 'shopee',
+                'order_id' => $o['order_sn'],
+                'amount' => $o['total_amount'],
+                'created_at' => date('c', $o['create_time']),
+                'items' => $items,
+                'status' => $o['order_status'] ?? 'N/A'
             ];
+            $totalSales += (float)$o['total_amount'];
+            $totalOrders++;
         }
-        usort($out,function($a,$b){return strtotime($b['created_at']) - strtotime($a['created_at']);});
-        return ['total_sales'=>$totalSales,'total_orders'=>$totalOrders,'orders'=>array_slice($out,0,$limit)];
+        
+        // Debug logging with more details  
+        error_log("[Shopee getOrders] API Response: AllOrderSnList count=" . count($allOrderSnList) . ", Details count=" . count($details) . ", Final orders count=" . count($out));
+        error_log("[Shopee getOrders] Total Sales: $totalSales, Total Orders: $totalOrders, Limit requested: $limit");
+        
+        return ['total_sales'=>$totalSales,'total_orders'=>$totalOrders,'orders'=>$out];
     }
-    public function getOrderItems($order_id){
-        // Shopee detail returns multiple orders; reuse detail call for single if needed
-        $detail = $this->callGet('/api/v2/order/get_order_detail',[
-            'order_sn_list'=>$order_id,
-            'response_optional_fields'=>'item_list'
-        ]);
-        $orders = $detail['response']['order_list'] ?? [];
-        $items=[];
-        foreach($orders as $o){ if(($o['order_sn']??'')!==$order_id) continue; foreach(($o['item_list']??[]) as $it){
-            $items[]=[
-                'name'=>$it['item_name'] ?? 'Unknown',
-                'quantity'=>(int)($it['model_quantity_purchased'] ?? $it['model_quantity'] ?? $it['quantity'] ?? 1),
-                'price'=>(float)($it['model_discounted_price'] ?? $it['model_original_price'] ?? $it['item_price'] ?? 0)
-            ];
-        }}
-        return $items;
-    }
-    public function getProducts($limit=50){
-        // Aggregate from today orders (basic proxy for top products)
-        $orders = $this->getOrders(null,null,50);
-        $agg=[];
-        foreach($orders['orders'] as $o){
-            $items = $this->getOrderItems($o['id']);
-            foreach($items as $it){
-                if(!isset($agg[$it['name']])) $agg[$it['name']] = ['name'=>$it['name'],'qty'=>0,'revenue'=>0];
-                $agg[$it['name']]['qty'] += $it['quantity'];
-                $agg[$it['name']]['revenue'] += $it['price'] * $it['quantity'];
+    public function testConnection($params=[]){
+        try {
+            $this->requireCreds();
+            
+            // Validate partner_id format first
+            $rawPartner = isset($this->config['partner_id']) ? (string)$this->config['partner_id'] : '';
+            $partnerClean = preg_replace('/\D+/', '', $rawPartner);
+            
+            // Shopee Partner ID can be 6-10 digits (from screenshot: Test=1183136, Live=2012442)
+            if (empty($partnerClean) || !is_numeric($partnerClean)) {
+                return ['success'=>false, 'message'=>'Shopee Partner ID ไม่ถูกต้อง: ต้องเป็นตัวเลขเท่านั้น (ปัจจุบัน: ' . $rawPartner . ')'];
             }
+            
+            if (strlen($partnerClean) < 6 || strlen($partnerClean) > 10) {
+                return ['success'=>false, 'message'=>'Shopee Partner ID ไม่ถูกต้อง: ต้องเป็นตัวเลข 6-10 หลัก (ปัจจุบัน: ' . $partnerClean . ' มี ' . strlen($partnerClean) . ' หลัก)'];
+            }
+            
+            // Common invalid Partner IDs to reject early (but allow valid ones like 2012442)
+            $invalidIds = ['1234567890', '0000000000', '1111111111', '123456'];
+            if (in_array($partnerClean, $invalidIds) || $partnerClean < 100000) {
+                return ['success'=>false, 'message'=>'Shopee Partner ID ไม่ถูกต้อง: ' . $partnerClean . ' ไม่ใช่ Partner ID จริง กรุณาตรวจสอบจาก Shopee Open Platform'];
+            }
+            
+            // Validate other required fields
+            if (empty($this->config['partner_key'])) {
+                return ['success'=>false, 'message'=>'Shopee Partner Key (Secret) ขาดหายไป'];
+            }
+            if (empty($this->config['shop_id'])) {
+                return ['success'=>false, 'message'=>'Shopee Shop ID ขาดหายไป'];  
+            }
+            if (empty($this->config['access_token'])) {
+                return ['success'=>false, 'message'=>'Shopee Access Token ขาดหายไป - กรุณาทำ OAuth authorization ก่อน'];
+            }
+            
+            // Try a simple test: get shop info. If it works, connection is OK.
+            $res = $this->callGet('/api/v2/shop/get_shop_info',[]);
+            if(isset($res['response']['shop_name'])){
+                return ['success'=>true, 'message'=>'เชื่อมต่อ Shopee สำเร็จ: '.$res['response']['shop_name']];
+            }
+            $error_msg = isset($res['message']) ? $res['message'] : (isset($res['error']) ? $res['error'] : 'Unknown error');
+            return ['success'=>false, 'message'=>'Shopee Test failed: ' . $error_msg];
+        } catch (Exception $e) {
+            return ['success'=>false, 'message'=>'Shopee Test error: ' . $e->getMessage()];
         }
-        // Convert assoc to indexed array for sorting
-        $aggList = array_values($agg);
-        usort($aggList,function($a,$b){ return $b['revenue'] <=> $a['revenue']; });
-        $out=[]; foreach(array_slice($aggList,0,$limit) as $row){ $out[]=['name'=>$row['name'],'sold'=>$row['qty']]; }
-        return $out;
     }
 }
 
 // ------------------------------
-// Lazada API Wrapper
+// Lazada API Wrapper (subset)
 // ------------------------------
 class LazadaAPI extends PlatformAPI {
-    private function signParams($path, $params) {
-        $params['app_key']    = $this->config['app_key'];
-        $params['timestamp']  = (string)(round(microtime(true)*1000));
-        $params['sign_method']= 'sha256';
-        if (!empty($this->config['access_token'])) $params['access_token'] = $this->config['access_token'];
-        ksort($params);
-        $str = $path; foreach ($params as $k=>$v){ if (is_array($v)) $v=json_encode($v); $str.=$k.$v; }
-        $params['sign'] = strtoupper(hash_hmac('sha256', $str, $this->config['app_secret']));
-        return $params;
+    private function requireCreds(){
+        foreach(['app_key','app_secret'] as $k){
+            if(empty($this->config[$k])) throw new Exception('Lazada missing credential: '.$k);
+        }
     }
-    private function httpGet($url) {
-        $ch = curl_init();
-    curl_setopt_array($ch, dm_curl_defaults([CURLOPT_URL=>$url, CURLOPT_TIMEOUT=>30]));
-        $res = curl_exec($ch); $code = curl_getinfo($ch,CURLINFO_HTTP_CODE); $err = curl_error($ch); curl_close($ch);
-        if ($err) throw new Exception('cURL: '.$err);
-        $json = json_decode($res,true);
-        if (json_last_error()!=JSON_ERROR_NONE) throw new Exception('Invalid JSON: '.json_last_error_msg());
-        if ($code!==200) throw new Exception('HTTP '.$code.': '.$res);
+    private function requireCredsWithToken(){
+        foreach(['app_key','app_secret','access_token'] as $k){
+            if(empty($this->config[$k])) throw new Exception('Lazada missing credential: '.$k);
+        }
+    }
+    private function sign($path,$params){
+        // Lazada signature algorithm:
+        // 1. Sort parameters by key
+        ksort($params);
+        
+        // 2. Create query string (key=value&key=value...)
+        $stringToSign = '';
+        foreach($params as $k=>$v) {
+            $stringToSign .= $k . $v;
+        }
+        
+        // 3. Build final string: API_PATH + sorted_params + API_SECRET
+        $signString = $path . $stringToSign;
+        
+        // 4. HMAC-SHA256 with app_secret
+        $signature = hash_hmac('sha256', $signString, $this->config['app_secret']);
+        
+        // 5. Return uppercase
+        return strtoupper($signature);
+    }
+    private function httpGet($url,$params){
+        $qs = http_build_query($params);
+        $fullUrl = $url . '?' . $qs;
+        
+        $ch=curl_init(); 
+        curl_setopt_array($ch, dm_curl_defaults([
+            CURLOPT_URL => $fullUrl, 
+            CURLOPT_TIMEOUT => 30,
+            CURLOPT_HTTPHEADER => [
+                'Content-Type: application/json',
+                'User-Agent: Mozilla/5.0 (compatible; LazadaBot/1.0)'
+            ]
+        ]));
+        
+        $res=curl_exec($ch); 
+        $code=curl_getinfo($ch,CURLINFO_HTTP_CODE); 
+        $err=curl_error($ch); 
+        curl_close($ch);
+        
+        if($err) throw new Exception('Lazada cURL: '.$err);
+        
+        $json=json_decode($res,true); 
+        if(json_last_error()!=JSON_ERROR_NONE) {
+            throw new Exception('Lazada JSON error: ' . json_last_error_msg() . ' - Response: ' . substr($res, 0, 200));
+        }
+        
+        // Check for HTTP errors
+        if($code !== 200) {
+            $errorMsg = isset($json['message']) ? $json['message'] : 'HTTP Error ' . $code;
+            throw new Exception('Lazada HTTP error (' . $code . '): ' . $errorMsg);
+        }
+        
+        // Check for API errors but don't throw exception here, let caller handle it
+        if(isset($json['code']) && $json['code'] !== '0' && $json['code'] !== 0) {
+            // Log the error but return the response for caller to handle
+            error_log('Lazada API returned error code: ' . $json['code'] . ' - ' . ($json['message'] ?? 'Unknown'));
+        }
+        
         return $json;
     }
-    private function call($path, $params) {
-        if (empty($this->config['app_key']) || empty($this->config['app_secret'])) {
-            throw new Exception('Missing app credentials');
-        }
-        $signed = $this->signParams($path, $params);
-        $query = http_build_query($signed);
-        return $this->httpGet($this->config['api_url'].$path.'?'.$query);
-    }
-    // OAuth Flow
-    public function buildAuthUrl($redirectUri, $state='') {
-        if (empty($this->config['app_key'])) throw new Exception('App Key not set');
-        $params = [
-            'response_type' => 'code',
-            'force_auth'    => 'true',
-            'redirect_uri'  => $redirectUri,
-            'client_id'     => $this->config['app_key'],
+    private function callGet($path,$queryParams){
+        $this->requireCredsWithToken(); // ต้องมี access_token
+        $timestamp = round(microtime(true)*1000); // Lazada ใช้ milliseconds
+        $baseParams=[
+            'app_key'=>$this->config['app_key'],
+            'access_token'=>$this->config['access_token'],
+            'timestamp'=>$timestamp,
+            'sign_method'=>'sha256'
         ];
-        if ($state) $params['state']=$state;
-        return $this->config['auth_url'].'?'.http_build_query($params);
+        $allParams = array_merge($baseParams,$queryParams);
+        $allParams['sign'] = $this->sign($path,$allParams);
+        
+        // Debug logging
+        error_log("[Lazada API] Path: $path, Timestamp: $timestamp");
+        error_log("[Lazada API] Params: " . json_encode($allParams));
+        
+        // Build the full URL with path
+        $fullUrl = rtrim($this->config['api_url'], '/') . $path;
+        return $this->httpGet($fullUrl,$allParams);
     }
-    public function exchangeCode($code, $redirectUri) {
-        $path = '/auth/token/create';
-        $params = [ 'code'=>$code, 'redirect_uri'=>$redirectUri ];
-        $signed = $this->signParams($path, $params);
-        $resp = $this->httpGet($this->config['api_url'].$path.'?'.http_build_query($signed));
-        if (($resp['code']??'')!=='0') throw new Exception('Exchange failed: '.json_encode($resp));
-        saveLazadaTokens($resp['data']);
-        return $resp['data'];
+    
+    private function callGetPublic($path,$queryParams){
+        $this->requireCreds(); // เช็คแค่ app_key และ app_secret
+        $timestamp = round(microtime(true)*1000); // Lazada ใช้ milliseconds
+        $baseParams=[
+            'app_key'=>$this->config['app_key'],
+            'timestamp'=>$timestamp,
+            'sign_method'=>'sha256'
+        ];
+        $allParams = array_merge($baseParams,$queryParams);
+        $allParams['sign'] = $this->sign($path,$allParams);
+        
+        // Debug logging
+        error_log("[Lazada Public API] Path: $path, Timestamp: $timestamp");
+        error_log("[Lazada Public API] Params: " . json_encode($allParams));
+        
+        // Build the full URL with path
+        $fullUrl = rtrim($this->config['api_url'], '/') . $path;
+        return $this->httpGet($fullUrl,$allParams);
     }
-    // Data Endpoints
-    public function getOrders($date_from=null,$date_to=null,$limit=50) {
-        $path = '/orders/get';
-        $params = [ 'limit'=>$limit ];
-        if (!$date_from && !$date_to) {
-            $params['created_after']  = date('Y-m-d\T00:00:00+07:00');
-            $params['created_before'] = date('Y-m-d\T23:59:59+07:00');
-        } else {
-            if ($date_from) $params['created_after']=$date_from;
-            if ($date_to)   $params['created_before']=$date_to;
+    public function getOrders($date_from=null,$date_to=null,$limit=999,$summaryOnly=false){ // เพิ่มเป็น 999 และ summaryOnly
+        if(!$date_from || !$date_to){
+            // Lazada API ต้องการ ISO 8601 format
+            $date_from = date('c', strtotime('-7 days')); // 7 วันที่แล้ว
+            $date_to = date('c'); // วันนี้
         }
-        $resp = $this->call($path,$params);
-        if (($resp['code']??'')!=='0') throw new Exception('Orders error: '.json_encode($resp));
-        return $this->normalizeOrders($resp['data']);
-    }
-    public function getOrderItems($order_id) {
-        $path = '/order/items/get';
-        $params = ['order_id' => $order_id];
-        $resp = $this->call($path, $params);
-        if (($resp['code'] ?? '') !== '0') throw new Exception('Order items error: ' . json_encode($resp));
-        $rawItems = $resp['data']['order_items'] ?? $resp['data'] ?? [];
-        if (!is_array($rawItems)) $rawItems = [];
-        $items = [];
-        foreach ($rawItems as $it) {
-            if (!is_array($it)) continue;
-            $name = $it['name'] ?? ($it['product_name'] ?? 'Unknown');
-            $qty  = (int)($it['quantity'] ?? $it['qty'] ?? 1);
-            $price = (float)($it['paid_price'] ?? $it['item_price'] ?? $it['price'] ?? 0);
-            $items[] = [ 'name' => $name, 'quantity' => $qty, 'price' => $price ];
-        }
-        return $items;
-    }
-    private function normalizeOrders($data) {
-        $raw = $data['orders'] ?? (is_array($data)?$data:[]);
-        $list=[]; $totalSales=0; $totalOrders=0;
-        foreach ($raw as $o) {
-            $id = $o['order_number'] ?? $o['order_id'] ?? 'N/A';
-            $statusArr = $o['statuses'] ?? [];
-            $status = end($statusArr) ?: 'pending';
-            $price = isset($o['price']) ? (float)$o['price'] : 0.0;
-            $totalSales += $price; $totalOrders++;
-            $list[] = [ 'id' => $id, 'product' => 'รายการสินค้า '.($o['items_count'] ?? 1).' รายการ', 'amount' => $price, 'status' => $this->mapStatus($status), 'created_at' => $this->formatDate($o['created_at'] ?? ''), ];
-        }
-        usort($list,function($a,$b){return strtotime($b['created_at'])-strtotime($a['created_at']);});
-        return [ 'total_sales'=>$totalSales, 'total_orders'=>$totalOrders, 'orders'=>array_slice($list,0,50) ];
-    }
-    public function getProducts($limit=100) {
-        $path = '/products/get';
-        $params = [ 'filter'=>'live', 'limit'=>$limit ];
-        $resp = $this->call($path,$params);
-        if (($resp['code']??'')!=='0') throw new Exception('Products error: '.json_encode($resp));
-        $out=[]; $prods = $resp['data']['products'] ?? [];
-        foreach ($prods as $p) { $name = $p['attributes']['name'] ?? ($p['name'] ?? 'Unknown'); $out[] = [ 'name' => $name, 'sold' => 0, 'revenue' => null ]; }
-        return array_slice($out,0,10);
-    }
-    private function mapStatus($s) { $map = [ 'pending'=>'pending', 'ready_to_ship'=>'processing','shipped'=>'shipped','delivered'=>'completed','canceled'=>'cancelled','returned'=>'returned' ]; return $map[$s] ?? 'pending'; }
-    private function formatDate($d){
-        if(!$d) return '';
-        try{
-            $dt = new DateTime($d);
-            // convert to Bangkok timezone
-            $tz = new DateTimeZone('Asia/Bangkok');
-            $dt->setTimezone($tz);
-            // Use ISO8601 with timezone offset so clients parse correctly
-            return $dt->format('Y-m-d\TH:i:sP');
-        } catch(Exception $e){
-            return $d;
-        }
-    }
-}
-
-// ------------------------------
-// TikTok API Stub
-// Minimal implementation so UI/settings can register the platform.
-// This is a non-functional stub — replace with real integration when available.
-// ------------------------------
-class TikTokAPI extends PlatformAPI {
-    public function __construct($platform, $config){ parent::__construct($platform,$config); }
-    public function getOrders($date_from=null,$date_to=null,$limit=50){
-        // If credentials not present, return empty result rather than throwing
-        $hasCreds = !empty($this->config['client_key']) && !empty($this->config['client_secret']);
-        if (!$hasCreds) return ['total_sales'=>0,'total_orders'=>0,'orders'=>[]];
-        // Placeholder: real implementation should call TikTok Shop APIs
-        return ['total_sales'=>0,'total_orders'=>0,'orders'=>[]];
-    }
-    public function getOrderItems($order_id){
-        return [];
-    }
-    public function getProducts($limit=50){ return []; }
-}
-
-// ------------------------------
-// Factory
-// ------------------------------
-function createPlatformAPI($platform,$config){
-    if ($platform==='lazada') return new LazadaAPI($platform,$config);
-    if ($platform==='shopee') return new ShopeeAPI($platform,$config);
-    if ($platform==='tiktok') return new TikTokAPI($platform,$config);
-    throw new Exception('Unsupported platform');
-}
-
-// ------------------------------
-// Optional Mock (only if explicitly requested via allow_mock=1)
-// ------------------------------
-// Mock helpers removed - API will not return synthesized/mock data
-
-// ------------------------------
-// Request Router
-// ------------------------------
-if (isset($_GET['action'])) {
-    header('Content-Type: application/json');
-    header('Access-Control-Allow-Origin: *');
-    header('Access-Control-Allow-Methods: GET, POST, OPTIONS');
-    header('Access-Control-Allow-Headers: Content-Type');
-
-    $action   = $_GET['action'];
-    $platform = $_GET['platform'] ?? 'lazada';
-    $allowMock = isset($_GET['allow_mock']) && $_GET['allow_mock']=='1';
-
-    try {
-        $cfgAll = getAPIConfig();
-        if (!isset($cfgAll[$platform])) throw new Exception('Unknown platform');
-        $cfg = $cfgAll[$platform];
-        // Allow overrides for refresh action when cookies may not yet be present (useful for testing)
-        if (isset($_GET['action']) && $_GET['action']==='refresh_token' && $platform==='shopee') {
-            if (isset($_GET['partner_id'])) $cfg['partner_id'] = $_GET['partner_id'];
-            if (isset($_GET['refresh_token'])) $cfg['refresh_token'] = $_GET['refresh_token'];
-            if (isset($_GET['shop_id'])) $cfg['shop_id'] = $_GET['shop_id'];
-        }
-        // Allow runtime override of Shopee env via query param ?env=sandbox
-        if ($platform === 'shopee' && isset($_GET['env'])) {
-            $env = $_GET['env'];
-            if (in_array($env,['prod','sandbox'])) {
-                $cfg['env'] = $env;
-                $cfg['api_url'] = ($env==='sandbox') ? 'https://openplatform.sandbox.test-stable.shopee.sg' : 'https://partner.shopeemobile.com';
-            }
-        }
-        $api = createPlatformAPI($platform,$cfg);
-
-        switch ($action) {
-            case 'curl_probe':
-                // Probe one or more URLs. Optional: host+ip to force SNI to a specific IP via CURLOPT_RESOLVE
-                $urlsParam = $_GET['urls'] ?? ($_GET['url'] ?? '');
-                $urls = [];
-                if ($urlsParam) {
-                    foreach (explode(',', $urlsParam) as $u) {
-                        $u = trim($u);
-                        if ($u) $urls[] = $u;
-                    }
-                }
-                if (!$urls) throw new Exception('Provide ?urls=https://example.com,https://1.2.3.4');
-                $host = $_GET['host'] ?? null;
-                $ip = $_GET['ip'] ?? null;
-                $out = [];
-                foreach ($urls as $u) {
-                    $out[] = [ 'url'=>$u, 'result'=> dm_curl_probe_run($u, $host, $ip) ];
-                }
-                echo json_encode(['success'=>true,'data'=>$out,'notes'=>'Optionally add &host=domain&ip=1.2.3.4 to test SNI over a specific IP']);
-                break;
-            case 'curl_info':
-                $diag = [
-                    'curl_installed'   => function_exists('curl_version'),
-                    'curl_version'     => function_exists('curl_version') ? curl_version()['version'] : null,
-                    'ssl_version'      => function_exists('curl_version') ? (curl_version()['ssl_version'] ?? null) : null,
-                    'curl_cainfo_ini'  => ini_get('curl.cainfo') ?: null,
-                    'ca_bundle_found'  => dm_find_ca_bundle(),
-                    'ip_resolve'       => defined('CURL_IPRESOLVE_V4') ? 'V4' : 'DEFAULT',
-                    'proxy'            => getenv('HTTPS_PROXY') ?: (getenv('HTTP_PROXY') ?: null),
-                    'use_proxy_flag'   => getenv('DM_USE_PROXY') === '1',
-                    'trust_windows_ca' => getenv('DM_CURL_TRUST_WIN') === '1',
-                    'force_tls12'      => getenv('DM_FORCE_TLS12') === '1',
-                    'dm_verbose'       => getenv('DM_CURL_VERBOSE') === '1',
-                    'dm_insecure'      => getenv('DM_CURL_INSECURE') === '1',
-                ];
-                if (isset($_GET['test_url']) && $_GET['test_url']) {
-                    $testUrl = $_GET['test_url'];
-                    $ch = curl_init();
-                    curl_setopt_array($ch, dm_curl_defaults([
-                        CURLOPT_URL => $testUrl,
-                        CURLOPT_TIMEOUT => 10,
-                        CURLOPT_NOBODY => false,
-                        CURLOPT_HTTPGET => true,
-                    ]));
-                    $body = curl_exec($ch);
-                    $http = curl_getinfo($ch, CURLINFO_HTTP_CODE);
-                    $err  = curl_error($ch);
-                    curl_close($ch);
-                    $diag['test'] = [ 'url'=>$testUrl, 'http'=>$http, 'error'=>$err ?: null, 'body_sample'=> is_string($body) ? substr($body,0,200) : null ];
-                }
-                echo json_encode(['success'=>true,'data'=>$diag]);
-                break;
-            case 'save_settings':
-                // Persist platform settings to DB; accepts JSON body or query params
-                $plat = $_GET['platform'] ?? $_POST['platform'] ?? null;
-                if (!$plat) $plat = $platform; // fallback to earlier parsed platform
-                if (!in_array($plat, ['shopee','lazada','tiktok'])) throw new Exception('Unsupported platform');
-                $raw = file_get_contents('php://input');
-                $data = [];
-                if ($raw) {
-                    $j = json_decode($raw, true);
-                    if (is_array($j)) $data = $j;
-                }
-                // Allow form-encoded fallback
-                if (!$data) $data = $_POST ?: $_GET;
-                // Whitelist per platform
-                $allow = [
-                    'shopee' => ['partner_id','partner_key','shop_id','access_token','refresh_token','expires_at','env','enabled'],
-                    'lazada' => ['app_key','app_secret','access_token','refresh_token','expires_in','refreshed_at','enabled'],
-                    'tiktok' => ['client_key','client_secret','access_token','refresh_token','enabled']
-                ];
-                $save = [];
-                foreach ($allow[$plat] as $k) {
-                    if (array_key_exists($k, $data)) {
-                        $val = $data[$k];
-                        if ($k === 'enabled') { $val = filter_var($val, FILTER_VALIDATE_BOOLEAN) ? 'true' : 'false'; }
-                        $save[$k] = (string)$val;
-                    }
-                }
-                if (!$save) throw new Exception('No settings to save');
-                dm_settings_set_many($plat, $save);
-                echo json_encode(['success'=>true,'platform'=>$plat,'saved'=>array_keys($save)]);
-                break;
-            case 'auth_url':
-                if(!$api instanceof LazadaAPI) throw new Exception('auth_url only for lazada in this version');
-                $redirect = $_GET['redirect_uri'] ?? '';
-                if (!$redirect) throw new Exception('redirect_uri required');
-                $state = $_GET['state'] ?? '';
-                $url = $api->buildAuthUrl($redirect,$state);
-                echo json_encode(['success'=>true,'auth_url'=>$url]);
-                break;
-            case 'exchange_token':
-                if(!$api instanceof LazadaAPI) throw new Exception('exchange_token only for lazada');
-                $code = $_GET['code'] ?? '';
-                $redirect = $_GET['redirect_uri'] ?? '';
-                if (!$code||!$redirect) throw new Exception('code & redirect_uri required');
-                $data = $api->exchangeCode($code,$redirect);
-                echo json_encode(['success'=>true,'data'=>$data]);
-                break;
-            case 'getSummary':
-            case 'summary':
-                $orders = $api->getOrders(null,null,50);
-                $products=[]; try { $products = $api->getProducts(50); } catch(Exception $e) { /* ignore */ }
-                echo json_encode(['success'=>true,'data'=>[
-                    'totalSales'=>$orders['total_sales'],
-                    'totalOrders'=>$orders['total_orders'],
-                    'orders'=>array_slice($orders['orders'],0,10),
-                    'products'=>array_slice($products,0,10)
-                ],'platform'=>$platform]);
-                break;
-            case 'getOrders':
-                $limit = (int)($_GET['limit'] ?? 10);
-                $orders = $api->getOrders(null,null,$limit);
-                $mapped = [];
-                foreach (array_slice($orders['orders'],0,$limit) as $o) {
-                    $items = [];
-                    if(method_exists($api,'getOrderItems')){ try { $items = $api->getOrderItems($o['id']); } catch(Exception $e) { $items = []; } }
-                    if (!empty($items)) {
-                        $productStrParts = []; $amountSum = 0;
-                        foreach ($items as $it) { $productStrParts[] = $it['name'].' x'.$it['quantity']; $amountSum += $it['price'] * $it['quantity']; }
-                        $productStr = implode(', ', $productStrParts);
-                        if ($amountSum > 0) $o['amount'] = $amountSum;
-                    } else { $productStr = $o['product']; }
-                    $mapped[] = [ 'order_id'=>$o['id'], 'product'=>$productStr, 'items'=>$items, 'amount'=>$o['amount'], 'created_at'=>$o['created_at'] ];
-                }
-                echo json_encode(['success'=>true,'data'=>['orders'=>$mapped],'source'=>'live','platform'=>$platform]);
-                break;
-            case 'getRecentActivity':
-                // Aggregate recent orders from all supported platforms (shopee, lazada, ...)
-                $platformsToCheck = ['shopee','lazada','tiktok'];
-                $events = [];
-                foreach ($platformsToCheck as $p) {
-                    try {
-                        if (!isset($cfgAll[$p])) continue;
-                        $cfgP = $cfgAll[$p];
-                        // createPlatformAPI may throw for unsupported platforms (e.g., tiktok not implemented)
-                        try { $apiP = createPlatformAPI($p, $cfgP); } catch (Exception $e) { continue; }
-
-                        // fetch a small number of recent orders
-                        $ordersResp = [];
-                        try { $ordersResp = $apiP->getOrders(null, null, 5); } catch (Exception $e) { continue; }
-                        $olist = $ordersResp['orders'] ?? [];
-                        foreach ($olist as $o) {
-                            $orderId = $o['id'] ?? ($o['order_id'] ?? 'N/A');
-                            $created = $o['created_at'] ?? '';
-                            $amount = isset($o['amount']) ? $o['amount'] : 0;
-                            $items = [];
-                            if (method_exists($apiP, 'getOrderItems')) {
-                                try { $items = $apiP->getOrderItems($orderId); } catch (Exception $e) { $items = []; }
-                            }
-                            $productStr = $o['product'] ?? '';
-
-                            // build event record expected by frontend
-                            $events[] = [
-                                'platform' => $p,
-                                'order_id' => $orderId,
-                                'items'    => $items,
-                                'product'  => $productStr,
-                                'amount'   => $amount,
-                                'created_at' => $created,
-                                'time'     => $created
+        
+        try {
+            // ใช้ Lazada API v2 format
+            $resp = $this->callGet('/orders/get',[
+                'created_after' => $date_from,
+                'created_before' => $date_to,
+                'limit' => $limit,
+                'sort_by' => 'created_at',
+                'sort_direction' => 'DESC'
+            ]);
+            
+            $orders = $resp['data']['orders'] ?? [];
+            $out=[]; $totalSales=0; $totalOrders=0;
+            
+            foreach($orders as $o){
+                $items = [];
+                
+                // ใช้ order items API
+                try {
+                    $detailResp = $this->callGet('/order/items/get', [
+                        'order_id' => $o['order_id'] ?? $o['order_number']
+                    ]);
+                    
+                    if(isset($detailResp['data']) && is_array($detailResp['data'])){
+                        foreach($detailResp['data'] as $item){
+                            $items[] = [
+                                'name' => $item['name'] ?? $item['item_name'] ?? 'N/A',
+                                'quantity' => $item['quantity'] ?? $item['order_quantity'] ?? 1
                             ];
                         }
-                    } catch (Exception $e) {
-                        // skip platform on error
-                        continue;
+                    }
+                } catch (Exception $e) {
+                    // หากไม่สามารถดึง items ได้ให้ข้าม
+                    error_log("Lazada get order items failed: " . $e->getMessage());
+                }
+                
+                $out[] = [
+                    'platform' => 'lazada',
+                    'order_id' => $o['order_number'] ?? $o['order_id'],
+                    'amount' => $o['price'] ?? $o['total_amount'] ?? 0,
+                    'created_at' => $o['created_at'] ?? date('c'),
+                    'items' => $items,
+                    'status' => is_array($o['statuses'] ?? []) ? ($o['statuses'][0] ?? 'N/A') : ($o['status'] ?? 'N/A')
+                ];
+                $totalSales += (float)($o['price'] ?? $o['total_amount'] ?? 0);
+                $totalOrders++;
+            }
+            
+            // Debug logging
+            error_log("[Lazada getOrders] Found " . count($out) . " orders, Total Sales: $totalSales, Total Orders: $totalOrders");
+            
+            return ['total_sales'=>$totalSales,'total_orders'=>$totalOrders,'orders'=>$out];
+            
+        } catch (Exception $e) {
+            error_log("Lazada getOrders failed: " . $e->getMessage());
+            return ['total_sales'=>0,'total_orders'=>0,'orders'=>[]];
+        }
+    }
+    public function testConnection($params=[]){
+        try {
+            $this->requireCreds(); // เช็คแค่ app_key และ app_secret
+            
+            // ทดสอบ API endpoints ที่ไม่ต้องการ access_token ก่อน
+            $publicEndpoints = [
+                '/system/time/get' => 'timestamp',      // Public system endpoint
+            ];
+            
+            // ถ้ามี access_token ให้ลอง endpoint ที่ต้องการ token
+            $protectedEndpoints = [];
+            if (!empty($this->config['access_token'])) {
+                $protectedEndpoints = [
+                    '/seller/get' => 'data',                // Seller info endpoint  
+                    '/orders/get' => 'data',                // Orders endpoint
+                    '/products/get' => 'data'               // Products endpoint
+                ];
+            }
+            
+            $allEndpoints = array_merge($publicEndpoints, $protectedEndpoints);
+            $lastError = '';
+            
+            foreach ($allEndpoints as $endpoint => $checkPath) {
+                try {
+                    // สำหรับ public endpoints ให้ใช้ callGetPublic
+                    if (array_key_exists($endpoint, $publicEndpoints)) {
+                        $res = $this->callGetPublic($endpoint, []);
+                    } else {
+                        $res = $this->callGet($endpoint, []);
+                    }
+                    
+                    // ตรวจสอบ response
+                    if (isset($res['code'])) {
+                        if ($res['code'] === '0' || $res['code'] === 0) {
+                            $message = 'เชื่อมต่อ Lazada สำเร็จ (endpoint: ' . $endpoint . ')';
+                            if ($endpoint === '/seller/get' && isset($res['data']['name'])) {
+                                $message .= ' - ร้าน: ' . $res['data']['name'];
+                            }
+                            return ['success'=>true, 'message'=>$message];
+                        } else {
+                            $lastError = 'API Error Code: ' . $res['code'] . ' - ' . ($res['message'] ?? 'Unknown error');
+                            continue;
+                        }
+                    }
+                    
+                    // ตรวจสอบ specific responses
+                    if ($endpoint === '/system/time/get' && isset($res['timestamp'])) {
+                        return ['success'=>true, 'message'=>'เชื่อมต่อ Lazada สำเร็จ (System Time API)'];
+                    }
+                    
+                    if ($endpoint === '/seller/get' && isset($res['data'])) {
+                        return ['success'=>true, 'message'=>'เชื่อมต่อ Lazada สำเร็จ (Seller API)'];
+                    }
+                    
+                } catch (Exception $e) {
+                    $lastError = $e->getMessage();
+                    continue; // Try next endpoint
+                }
+            }
+            
+            return ['success'=>false, 'message'=>'Lazada Test failed - All endpoints failed. Last error: ' . $lastError];
+        } catch (Exception $e) {
+            return ['success'=>false, 'message'=>'Lazada Test error: ' . $e->getMessage()];
+        }
+    }
+    
+}
+
+// ------------------------------
+// TikTok API Wrapper (stub)
+// ------------------------------
+class TikTokAPI extends PlatformAPI {
+    public function getOrders($date_from=null,$date_to=null,$limit=999,$summaryOnly=false){ // เพิ่มเป็น 999 และ summaryOnly
+        try {
+            // สำหรับ TikTok ยังไม่ได้เชื่อมต่อจริง ให้ส่งข้อมูลว่าง
+            error_log("[TikTok getOrders] TikTok API not implemented yet, returning empty data");
+            return ['total_sales'=>0,'total_orders'=>0,'orders'=>[]];
+            
+        } catch (Exception $e) {
+            error_log("TikTok getOrders failed: " . $e->getMessage());
+            return ['total_sales'=>0,'total_orders'=>0,'orders'=>[]];
+        }
+    }
+    
+    public function testConnection($params=[]){
+        try {
+            // Placeholder: In a real scenario, you'd call a simple TikTok API endpoint
+            // like get_authorized_shops or similar.
+            if(!empty($this->config['client_key']) && !empty($this->config['access_token'])){
+                return ['success'=>true, 'message'=>'เชื่อมต่อ TikTok สำเร็จ (จำลอง)'];
+            }
+            return ['success'=>false, 'message'=>'TikTok credentials not set. กรุณาป้อน Client Key และ Access Token'];
+        } catch (Exception $e) {
+            return ['success'=>false, 'message'=>'TikTok Test error: ' . $e->getMessage()];
+        }
+    }
+}
+
+// ------------------------------
+// API Action Router
+// ------------------------------
+function handle_request() {
+    $action = $_GET['action'] ?? null;
+    $platform = $_GET['platform'] ?? null;
+    $config = getAPIConfig();
+
+    $api = null;
+    if ($platform) {
+        switch ($platform) {
+            case 'lazada': $api = new LazadaAPI('lazada', $config['lazada']); break;
+            case 'shopee': $api = new ShopeeAPI('shopee', $config['shopee']); break;
+            case 'tiktok': $api = new TikTokAPI('tiktok', $config['tiktok']); break;
+            default: return ['success' => false, 'error' => 'Unknown platform'];
+        }
+    }
+
+    switch ($action) {
+        case 'getSummary':
+            if (!$api) return ['success' => false, 'error' => 'Platform required'];
+            try {
+                $startTime = microtime(true);
+                
+                // Try summary mode first for speed, fallback to full mode
+                try {
+                    if (method_exists($api, 'getOrders')) {
+                        $reflection = new ReflectionMethod($api, 'getOrders');
+                        $params = $reflection->getParameters();
+                        if (count($params) >= 4) {
+                            // Support summaryOnly parameter - ใช้ limit 999 แต่ summaryOnly=true
+                            $summary = $api->getOrders(null, null, 999, true); // summaryOnly = true
+                        } else {
+                            $summary = $api->getOrders(null, null, 999);
+                        }
+                    } else {
+                        $summary = $api->getOrders(null, null, 999);
+                    }
+                } catch (Exception $e) {
+                    // Fallback to standard mode if summary fails
+                    error_log("[getSummary] Summary mode failed for $platform, falling back to standard mode: " . $e->getMessage());
+                    $summary = $api->getOrders(null, null, 999);
+                }
+                
+                $loadTime = round((microtime(true) - $startTime) * 1000, 2);
+                
+                // Debug logging
+                error_log("[getSummary] Platform: $platform, Total Orders: " . $summary['total_orders'] . ", Total Sales: " . $summary['total_sales'] . ", Load Time: {$loadTime}ms");
+                
+                return ['success' => true, 'data' => [
+                    'totalSales' => $summary['total_sales'],
+                    'totalOrders' => $summary['total_orders'],
+                    'loadTime' => $loadTime
+                ]];
+            } catch (Exception $e) {
+                error_log("[getSummary] Platform: $platform, Error: " . $e->getMessage());
+                return ['success' => false, 'error' => $e->getMessage()];
+            }
+
+        case 'getOrders':
+            if (!$api) return ['success' => false, 'error' => 'Platform required'];
+            try {
+                $startTime = microtime(true);
+                $date_from = $_GET['date_from'] ?? null;
+                $date_to = $_GET['date_to'] ?? null;
+                $limit = (int)($_GET['limit'] ?? 200); // เพิ่มเป็น 200 สำหรับ frontend (สมดุลระหว่างความเร็วและข้อมูล)
+                $orders = $api->getOrders($date_from, $date_to, $limit);
+                $loadTime = round((microtime(true) - $startTime) * 1000, 2);
+                
+                // Add load time to response
+                $orders['loadTime'] = $loadTime;
+                error_log("[getOrders] Platform: $platform, Limit: $limit, Orders: " . count($orders['orders'] ?? []) . ", Load Time: {$loadTime}ms");
+                
+                return ['success' => true, 'data' => $orders];
+            } catch (Exception $e) {
+                return ['success' => false, 'error' => $e->getMessage()];
+            }
+
+        case 'getRecentActivity':
+            $startTime = microtime(true);
+            // Fetch from all enabled platforms and merge (ใช้ limit เล็กเพื่อความเร็ว)
+            $allActivity = [];
+            $platforms = ['shopee', 'lazada', 'tiktok'];
+            $enabledCount = 0;
+            
+            foreach($platforms as $p){
+                $p_conf = dm_settings_get_all($p);
+                if(isset($p_conf['enabled']) && $p_conf['enabled']==='true'){
+                    $enabledCount++;
+                    try {
+                        $p_api = null;
+                        if($p==='lazada') $p_api = new LazadaAPI('lazada', $config['lazada']);
+                        if($p==='shopee') $p_api = new ShopeeAPI('shopee', $config['shopee']);
+                        // if($p==='tiktok') $p_api = new TikTokAPI('tiktok', $config['tiktok']); // disabled for now
+                        
+                        if($p_api){
+                            // ลด limit เหลือ 15 เพื่อความเร็ว
+                            $res = $p_api->getOrders(null,null,15); 
+                            if(!empty($res['orders'])) {
+                                // เอาแค่ order ล่าสุด 5 ตัวต่อแพลตฟอร์ม
+                                $recentOrders = array_slice($res['orders'], 0, 5);
+                                $allActivity = array_merge($allActivity, $recentOrders);
+                            }
+                        }
+                    } catch(Exception $e){
+                        error_log("[getRecentActivity] Error fetching from $p: " . $e->getMessage());
+                        // Ignore errors from one platform
                     }
                 }
-                // sort by created_at (newest first) if possible
-                usort($events, function($a,$b){
-                    $ta = strtotime($a['created_at'] ?? 0);
-                    $tb = strtotime($b['created_at'] ?? 0);
-                    return $tb <=> $ta;
-                });
-                // limit events returned
-                $events = array_slice($events, 0, 20);
-                echo json_encode(['success'=>true,'data'=>$events,'source'=>'live']);
-                break;
-            case 'getTopProducts':
-                $limit = (int)($_GET['limit'] ?? 10); $products = $api->getProducts($limit);
-                $mapped=[]; foreach ($products as $p){ $mapped[]=['name'=>$p['name'],'sold'=>$p['sold']]; }
-                echo json_encode(['success'=>true,'data'=>['products'=>array_slice($mapped,0,$limit)],'source'=>'live','platform'=>$platform]);
-                break;
-            case 'refresh_token':
-                // รองรับทุก platform ที่มี refreshAccessToken
-                if (!method_exists($api, 'refreshAccessToken')) {
-                    throw new Exception('refresh_token not supported for this platform');
-                }
-                try {
-                    $r = $api->refreshAccessToken();
-                    echo json_encode(['success'=>true,'data'=>$r]);
-                } catch(Exception $e) {
-                    // เพิ่มรายละเอียด error log
-                    error_log('[dashboardmarket] refresh_token error: ' . $e->getMessage());
-                    echo json_encode(['success'=>false,'error'=>$e->getMessage()]);
-                }
-                break;
-            case 'test_connection':
-                $orders = $api->getOrders(null,null,5);
-                echo json_encode(['success'=>true,'message'=>'Connection OK','data_count'=>$orders['total_orders'],'platform'=>$platform]);
-                break;
-            default:
-                throw new Exception('Invalid action');
-        }
-    } catch (Exception $e) {
-        // No mock fallbacks: always return the actual error to the client
-        http_response_code(400);
-        echo json_encode(['success'=>false,'error'=>$e->getMessage(),'platform'=>$platform]);
+            }
+            
+            $loadTime = round((microtime(true) - $startTime) * 1000, 2);
+            error_log("[getRecentActivity] Loaded " . count($allActivity) . " activities from $enabledCount platforms in {$loadTime}ms");
+            
+            return ['success'=>true, 'data'=>$allActivity, 'loadTime'=>$loadTime];
+
+        case 'get_settings':
+            if (!$platform) return ['success' => false, 'error' => 'Platform required'];
+            $settings = dm_settings_get_all($platform);
+            return ['success' => true, 'data' => $settings];
+
+        case 'save_settings':
+            if (!$platform) return ['success' => false, 'error' => 'Platform required'];
+            $data = json_decode(file_get_contents('php://input'), true);
+            if (!$data) return ['success' => false, 'error' => 'Invalid data'];
+
+            // Convert boolean 'enabled' to string 'true'/'false' before saving
+            if (isset($data['enabled'])) {
+                $data['enabled'] = $data['enabled'] ? 'true' : 'false';
+            }
+            
+            foreach($data as $key => $value){
+                dm_settings_set($platform, $key, is_bool($value) ? ($value ? 'true' : 'false') : $value);
+            }
+            // Also save to cookie for immediate UI feedback on non-sensitive fields
+            if(isset($data['enabled'])) setcookie($platform.'_enabled', $data['enabled'], time()+3600*24*365, '/');
+
+            return ['success' => true, 'message' => 'Settings saved'];
+
+        case 'test_connection':
+            if (!$api) return ['success' => false, 'error' => 'Platform required'];
+            try {
+                // Pass through any extra params from the request
+                $params = $_GET;
+                unset($params['action'], $params['platform']);
+                $result = $api->testConnection($params);
+                return $result;
+            } catch (Exception $e) {
+                return ['success' => false, 'error' => 'Test failed: ' . $e->getMessage()];
+            }
+
+        case 'refresh_token':
+            if ($platform !== 'shopee') return ['success' => false, 'error' => 'Refresh only supported for Shopee'];
+            try {
+                $shopeeApi = new ShopeeAPI('shopee', $config['shopee']);
+                $result = $shopeeApi->refreshAccessToken();
+                return ['success' => true, 'data' => $result];
+            } catch (Exception $e) {
+                return ['success' => false, 'error' => 'Refresh failed: ' . $e->getMessage()];
+            }
+
+        case 'curl_info':
+            $target = $_GET['target'] ?? 'https://www.google.com';
+            $info = dm_curl_probe_run($target);
+            return ['success'=>true, 'data'=>$info];
+
+        default:
+            return ['success' => false, 'error' => 'Invalid action'];
     }
-    exit;
 }
-?>
+
+// Main execution
+header('Content-Type: application/json');
+echo json_encode(handle_request());

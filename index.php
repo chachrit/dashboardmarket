@@ -293,11 +293,18 @@
         
         function loadRecentActivity() {
             const container = document.getElementById('recentActivity');
-            container.innerHTML = ''; // clear
+            const startTime = performance.now();
+            container.innerHTML = '<div class="text-sm text-gray-500 animate-pulse">กำลังโหลดกิจกรรมล่าสุด...</div>'; // แสดง loading
+            
             fetch('api.php?action=getRecentActivity')
                 .then(res => res.json())
                 .then(json => {
+                    const loadTime = Math.round(performance.now() - startTime);
+                    container.innerHTML = ''; // clear loading
+                    
                     if(json.success && Array.isArray(json.data)){
+                        console.log(`Recent Activity loaded in ${loadTime}ms (API: ${json.loadTime || 'N/A'}ms)`);
+                        
                         // sort newest first by created_at/time
                         try{
                             json.data.sort((a,b)=>{
@@ -306,22 +313,28 @@
                                 return tb - ta;
                             });
                         }catch(e){}
-                        json.data.forEach((item, idx) => {
-                            const el = renderRecentActivityItem(item);
-                            if(el) container.appendChild(el);
-                        });
+                        
+                        if(json.data.length === 0) {
+                            container.innerHTML = '<div class="text-sm text-gray-500">ไม่มีกิจกรรมล่าสุด</div>';
+                        } else {
+                            json.data.forEach((item, idx) => {
+                                const el = renderRecentActivityItem(item);
+                                if(el) container.appendChild(el);
+                            });
+                        }
                     } else {
                         container.innerHTML = '<div class="text-sm text-gray-500">ไม่พบกิจกรรมล่าสุด</div>';
                     }
                 })
                 .catch(err => {
-                    console.error('Failed to load recent activity', err);
-                    container.innerHTML = '<div class="text-sm text-gray-500">โหลดกิจกรรมล้มเหลว</div>';
+                    const loadTime = Math.round(performance.now() - startTime);
+                    console.error('Failed to load recent activity in', loadTime + 'ms:', err);
+                    container.innerHTML = '<div class="text-sm text-red-500">โหลดกิจกรรมล้มเหลว</div>';
                 });
 
             // refresh periodically
             if(window._recentActivityTimer) clearTimeout(window._recentActivityTimer);
-            window._recentActivityTimer = setTimeout(loadRecentActivity, 15000);
+            window._recentActivityTimer = setTimeout(loadRecentActivity, 30000);
         }
 
         function renderRecentActivityItem(item){
@@ -390,22 +403,26 @@
             }
 
             platforms.forEach(platform => {
+                const startTime = performance.now();
                 fetch(`api.php?action=getSummary&platform=${platform}`)
                     .then(response => response.json())
                     .then(data => {
+                        const loadTime = Math.round(performance.now() - startTime);
                         if (data.success && data.data) {
                             salesData[platform] = {
                                 sales: data.data.totalSales || 0,
                                 orders: data.data.totalOrders || 0
                             };
+                            console.log(`✅ ${platform}: Orders=${data.data.totalOrders}, Sales=₿${data.data.totalSales}, Time=${loadTime}ms (API: ${data.data.loadTime || 'N/A'}ms)`);
                         } else {
-                            console.log(`No live data for ${platform}:`, data.error);
+                            console.log(`❌ ${platform}: failed in ${loadTime}ms -`, data.error);
                             // Do not use mock values — set to zero so totals reflect real data only
                             salesData[platform] = { sales: 0, orders: 0 };
                         }
                     })
                     .catch(error => {
-                        console.error(`Failed to load ${platform} data:`, error);
+                        const loadTime = Math.round(performance.now() - startTime);
+                        console.error(`❌ ${platform}: error in ${loadTime}ms -`, error);
                         // On fetch error, don't fill with mock numbers
                         salesData[platform] = { sales: 0, orders: 0 };
                     })
