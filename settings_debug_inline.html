@@ -1,0 +1,163 @@
+<!-- Add this script tag before the closing </body> tag in settings.php for debugging -->
+<script src="settings_debug.js"></script>
+
+<!-- OR add this inline debug code in settings.php -->
+<script>
+// Debug mode toggle - set to true for debugging
+const DEBUG_MODE = true;
+
+if (DEBUG_MODE) {
+    // Override console to show messages on page
+    const debugOutput = document.createElement('div');
+    debugOutput.id = 'debug-output';
+    debugOutput.style.cssText = `
+        position: fixed;
+        bottom: 0;
+        left: 0;
+        width: 100%;
+        height: 300px;
+        background: rgba(0,0,0,0.9);
+        color: #00ff00;
+        font-family: monospace;
+        font-size: 12px;
+        padding: 10px;
+        overflow-y: scroll;
+        z-index: 9999;
+        border-top: 2px solid #00ff00;
+    `;
+    debugOutput.innerHTML = '<div style="color: #ffff00;">DEBUG MODE ENABLED - API Calls will be logged here</div>';
+    document.body.appendChild(debugOutput);
+    
+    const originalConsoleLog = console.log;
+    const originalConsoleError = console.error;
+    const originalConsoleWarn = console.warn;
+    
+    function addToDebugOutput(message, type = 'log') {
+        const colors = { log: '#00ff00', error: '#ff0000', warn: '#ffff00' };
+        const div = document.createElement('div');
+        div.style.color = colors[type] || colors.log;
+        div.textContent = new Date().toLocaleTimeString() + ' | ' + message;
+        debugOutput.appendChild(div);
+        debugOutput.scrollTop = debugOutput.scrollHeight;
+    }
+    
+    console.log = function(...args) {
+        originalConsoleLog.apply(console, args);
+        addToDebugOutput(args.join(' '), 'log');
+    };
+    
+    console.error = function(...args) {
+        originalConsoleError.apply(console, args);
+        addToDebugOutput(args.join(' '), 'error');
+    };
+    
+    console.warn = function(...args) {
+        originalConsoleWarn.apply(console, args);
+        addToDebugOutput(args.join(' '), 'warn');
+    };
+}
+
+// Enhanced saveSettings with verification
+async function saveSettings(platform) {
+    console.log(`=== SAVE SETTINGS: ${platform} ===`);
+    
+    const settings = getSettingsFromForm(platform);
+    console.log('Form data:', JSON.stringify(settings));
+    
+    try {
+        const url = `api.php?action=save_settings&platform=${platform}`;
+        console.log('API URL:', url);
+        
+        // Show loading state
+        const loadingMsg = showMessage(`กำลังบันทึก ${platform}...`, 'info');
+        
+        const response = await fetch(url, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(settings)
+        });
+        
+        console.log(`Response status: ${response.status} ${response.statusText}`);
+        
+        const responseText = await response.text();
+        console.log('Raw response:', responseText);
+        
+        let result;
+        try {
+            result = JSON.parse(responseText);
+        } catch (parseError) {
+            console.error('JSON parse failed:', parseError);
+            throw new Error('Server response is not valid JSON: ' + responseText.substring(0, 100));
+        }
+        
+        if (!response.ok) {
+            throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+        }
+        
+        if (result.success) {
+            console.log('✓ Save API call successful');
+            showMessage(`บันทึก ${platform} เรียบร้อย`, 'success');
+            
+            // Verify the save by reading back
+            setTimeout(async () => {
+                try {
+                    console.log('Verifying saved data...');
+                    const verifyResponse = await fetch(`api.php?action=get_settings&platform=${platform}`);
+                    const verifyText = await verifyResponse.text();
+                    console.log('Verify raw response:', verifyText);
+                    
+                    const verifyResult = JSON.parse(verifyText);
+                    
+                    if (verifyResult.success) {
+                        console.log('Current saved settings:', JSON.stringify(verifyResult.data));
+                        
+                        // Check if our data was actually saved
+                        let savedCorrectly = true;
+                        const mismatches = [];
+                        
+                        for (const [key, sentValue] of Object.entries(settings)) {
+                            const savedValue = verifyResult.data[key];
+                            const normalizedSent = typeof sentValue === 'boolean' ? (sentValue ? 'true' : 'false') : String(sentValue);
+                            
+                            if (savedValue !== normalizedSent) {
+                                savedCorrectly = false;
+                                mismatches.push({ key, sent: normalizedSent, saved: savedValue });
+                                console.warn(`MISMATCH ${key}: sent='${normalizedSent}' but saved='${savedValue}'`);
+                            }
+                        }
+                        
+                        if (savedCorrectly) {
+                            console.log('✓ VERIFICATION PASSED - All data saved correctly');
+                        } else {
+                            console.error('✗ VERIFICATION FAILED - Data not saved correctly');
+                            console.error('Mismatches:', mismatches);
+                            showMessage(`⚠️ การบันทึกมีปัญหา: ${mismatches.length} รายการไม่ถูกต้อง`, 'error');
+                        }
+                    } else {
+                        console.error('Verification API failed:', verifyResult.error);
+                    }
+                } catch (verifyError) {
+                    console.error('Verification error:', verifyError);
+                    showMessage('ไม่สามารถตรวจสอบการบันทึกได้', 'warn');
+                }
+            }, 500);
+            
+        } else {
+            console.error('✗ Save API failed:', result.error);
+            showMessage(`บันทึก ${platform} ล้มเหลว: ${result.error}`, 'error');
+        }
+        
+        return result;
+        
+    } catch (error) {
+        console.error('=== SAVE ERROR ===');
+        console.error('Error:', error.message);
+        console.error('Stack:', error.stack);
+        
+        showMessage(`บันทึก ${platform} ล้มเหลว: ${error.message}`, 'error');
+        throw error;
+    }
+}
+
+console.log('Enhanced settings debug loaded');
+</script>

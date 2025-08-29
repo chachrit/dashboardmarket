@@ -1,10 +1,5 @@
 <?php
-// Database helper using MySQL PDO only
-// Load configuration first
-if (file_exists(__DIR__ . '/config.php')) {
-    require_once __DIR__ . '/config.php';
-}
-
+// Lightweight DB helper using PDO - MySQL only
 // Configuration via environment variables:
 // - DM_DB_DSN  e.g. mysql:host=localhost;dbname=dashboard;charset=utf8mb4
 // - DM_DB_USER
@@ -55,26 +50,28 @@ function dm_db() {
         PRIMARY KEY (`scope`, `name`)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci");
 
-    // Ensure orders table exists (compatible with pagination_manager.php)
+    // Ensure orders table exists
     $pdo->exec("CREATE TABLE IF NOT EXISTS `orders` (
-        `id` BIGINT AUTO_INCREMENT PRIMARY KEY,
+        `id` INT AUTO_INCREMENT PRIMARY KEY,
         `platform` VARCHAR(20) NOT NULL,
         `order_id` VARCHAR(100) NOT NULL,
-        `amount` DECIMAL(15,2) DEFAULT 0,
-        `status` VARCHAR(50) NULL,
-        `created_at` VARCHAR(50) NULL,
-        `items` TEXT NULL,
-        `raw_data` TEXT NULL,
-        `fetched_at` BIGINT DEFAULT UNIX_TIMESTAMP(),
-        UNIQUE KEY `uk_orders_platform_orderid` (`platform`, `order_id`),
-        INDEX `idx_orders_platform_created` (`platform`, `created_at` DESC),
-        INDEX `idx_orders_fetched_at` (`fetched_at` DESC)
+        `order_status` VARCHAR(50) NULL,
+        `total_amount` DECIMAL(10,2) NULL,
+        `currency` VARCHAR(10) NULL,
+        `customer_name` VARCHAR(255) NULL,
+        `customer_email` VARCHAR(255) NULL,
+        `created_at` BIGINT NULL,
+        `updated_at` BIGINT NULL,
+        `order_data` JSON NULL,
+        UNIQUE KEY `unique_platform_order` (`platform`, `order_id`),
+        INDEX `idx_platform` (`platform`),
+        INDEX `idx_created_at` (`created_at`),
+        INDEX `idx_order_status` (`order_status`)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci");
 
     return $pdo;
 }
 
-// Settings functions
 function dm_settings_get($scope, $name, $default = null) {
     $pdo = dm_db();
     $stmt = $pdo->prepare('SELECT value FROM dm_settings WHERE scope = ? AND name = ?');
@@ -97,19 +94,14 @@ function dm_settings_get_all($scope) {
     $stmt = $pdo->prepare('SELECT name, value FROM dm_settings WHERE scope = ?');
     $stmt->execute([$scope]);
     $out = [];
-    foreach ($stmt->fetchAll() as $row) { 
-        $out[$row['name']] = $row['value']; 
-    }
+    foreach ($stmt->fetchAll() as $row) { $out[$row['name']] = $row['value']; }
     return $out;
 }
 
 function dm_settings_set_many($scope, array $assoc) {
-    foreach ($assoc as $k => $v) { 
-        dm_settings_set($scope, $k, $v); 
-    }
+    foreach ($assoc as $k => $v) { dm_settings_set($scope, $k, $v); }
 }
 
-// Database info functions
 function dm_get_db_type() {
     try {
         $pdo = dm_db();
@@ -144,41 +136,75 @@ function dm_get_db_info() {
     }
 }
 
-// Orders functions
-function dm_order_save($platform, array $orders) {
-    $pdo = dm_db();
-    if (!$pdo) return false;
+/**
+ * บันทึกข้อมูล order ลงฐานข้อมูล
+ */
+function dm_order_save($platform, $order_id, $amount, $status, $created_at, $items = null, $raw_data = null) {
+    global $dm_db_connection;
+    
+    if (!$dm_db_connection) {
+        $dm_db_connection = dm_db();
+    }
+    
+    if (!$dm_db_connection) {
+        return false;
+    }
     
     try {
-        $stmt = $pdo->prepare("INSERT INTO orders (platform, order_id, order_status, total_amount, currency, customer_name, customer_email, created_at, updated_at, order_data) VALUES (?,?,?,?,?,?,?,?,?,?) ON DUPLICATE KEY UPDATE order_status = VALUES(order_status), total_amount = VALUES(total_amount), customer_name = VALUES(customer_name), customer_email = VALUES(customer_email), updated_at = VALUES(updated_at), order_data = VALUES(order_data)");
+        $driver = $dm_db_connection->getAttribute(PDO::ATTR_DRIVER_NAME);
         
-        $now = time();
-        $saved_count = 0;
-        
-        foreach ($orders as $order) {
-            $stmt->execute([
-                $platform,
-                $order['order_id'] ?? '',
-                $order['order_status'] ?? null,
-                $order['total_amount'] ?? null,
-                $order['currency'] ?? null,
-                $order['customer_name'] ?? null,
-                $order['customer_email'] ?? null,
-                $order['created_at'] ?? $now,
-                $now,
-                json_encode($order)
-            ]);
-            $saved_count++;
+        if ($driver === 'mysql') {
+            $sql = "INSERT INTO orders (platform, order_id, amount, status, created_at, items, raw_data, fetched_at) 
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?) 
+                    ON DUPLICATE KEY UPDATE 
+                        amount = VALUES(amount),
+                        status = VALUES(status),
+                        created_at = VALUES(created_at),
+                        items = VALUES(items),
+                        raw_data = VALUES(raw_data),
+                        fetched_at = VALUES(fetched_at)";
+        } elseif ($driver === 'sqlsrv') {
+            $sql = "IF NOT EXISTS (SELECT 1 FROM orders WHERE platform = ? AND order_id = ?)
+                        INSERT INTO orders (platform, order_id, amount, status, created_at, items, raw_data, fetched_at)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    ELSE
+                        UPDATE orders SET 
+                            amount = ?, status = ?, created_at = ?, items = ?, raw_data = ?, fetched_at = ?
+                        WHERE platform = ? AND order_id = ?";
+        } else { // sqlite
+            $sql = "INSERT OR REPLACE INTO orders (platform, order_id, amount, status, created_at, items, raw_data, fetched_at) 
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)";
         }
         
-        error_log("dm_order_save: Saved $saved_count orders for platform $platform");
-        return $saved_count;
+        $stmt = $dm_db_connection->prepare($sql);
+        $fetched_at = time();
+        
+        $items_json = is_array($items) ? json_encode($items, JSON_UNESCAPED_UNICODE) : $items;
+        $raw_data_json = is_array($raw_data) ? json_encode($raw_data, JSON_UNESCAPED_UNICODE) : $raw_data;
+        
+        if ($driver === 'sqlsrv') {
+            // MSSQL ต้องใส่ parameter 2 ครั้ง
+            $result = $stmt->execute([
+                $platform, $order_id, // CHECK EXISTS
+                $platform, $order_id, $amount, $status, $created_at, $items_json, $raw_data_json, $fetched_at, // INSERT
+                $amount, $status, $created_at, $items_json, $raw_data_json, $fetched_at, $platform, $order_id // UPDATE
+            ]);
+        } else {
+            $result = $stmt->execute([
+                $platform, $order_id, $amount, $status, $created_at, $items_json, $raw_data_json, $fetched_at
+            ]);
+        }
+        
+        return $result;
     } catch (Exception $e) {
         error_log("dm_order_save error: " . $e->getMessage());
         return false;
     }
 }
 
+/**
+ * ดึงข้อมูล orders จากฐานข้อมูล
+ */
 function dm_orders_get($platform, $date_from = null, $date_to = null, $limit = 100) {
     $pdo = dm_db();
     if (!$pdo) return [];
@@ -209,6 +235,9 @@ function dm_orders_get($platform, $date_from = null, $date_to = null, $limit = 1
     }
 }
 
+/**
+ * ตรวจสอบความสดใหม่ของข้อมูล orders
+ */
 function dm_orders_is_fresh($platform, $maxAgeMinutes = 30) {
     $pdo = dm_db();
     if (!$pdo) return false;
@@ -224,10 +253,24 @@ function dm_orders_is_fresh($platform, $maxAgeMinutes = 30) {
         return false;
     }
 }
+    
+    if (!$dm_db_connection) {
+        $dm_db_connection = dm_db();
+    }
+}
 
+/**
+ * ดึงสถิติ orders จากฐานข้อมูล
+ */
 function dm_orders_get_stats($platform, $date_from = null, $date_to = null) {
-    $pdo = dm_db();
-    if (!$pdo) return [];
+    
+    if (!$dm_db_connection) {
+        $dm_db_connection = dm_db();
+    }
+    
+    if (!$dm_db_connection) {
+        return ['total_orders' => 0, 'total_sales' => 0, 'avg_order_value' => 0];
+    }
     
     try {
         if (!$date_from) $date_from = date('Y-m-d');
@@ -235,55 +278,25 @@ function dm_orders_get_stats($platform, $date_from = null, $date_to = null) {
         
         $sql = "SELECT 
                     COUNT(*) as total_orders,
-                    SUM(total_amount) as total_revenue,
-                    AVG(total_amount) as avg_order_value,
-                    COUNT(DISTINCT order_status) as status_count
+                    COALESCE(SUM(amount), 0) as total_sales,
+                    COALESCE(AVG(amount), 0) as avg_order_value
                 FROM orders 
                 WHERE platform = ? 
-                AND DATE(FROM_UNIXTIME(created_at)) >= ? 
-                AND DATE(FROM_UNIXTIME(created_at)) <= ?";
+                AND created_at >= ? 
+                AND created_at <= ?";
                 
-        $stmt = $pdo->prepare($sql);
-        $stmt->execute([$platform, $date_from, $date_to]);
+        $stmt = $dm_db_connection->prepare($sql);
+        $stmt->execute([
+            $platform,
+            $date_from . ' 00:00:00',
+            $date_to . ' 23:59:59'
+        ]);
         
-        return $stmt->fetch(PDO::FETCH_ASSOC) ?: [];
+        $result = $stmt->fetch(PDO::FETCH_ASSOC);
+        return $result ? $result : ['total_orders' => 0, 'total_sales' => 0, 'avg_order_value' => 0];
     } catch (Exception $e) {
         error_log("dm_orders_get_stats error: " . $e->getMessage());
-        return [];
-    }
-}
-
-function dm_orders_count($platform = null) {
-    $pdo = dm_db();
-    if (!$pdo) return 0;
-    
-    try {
-        if ($platform) {
-            $stmt = $pdo->prepare('SELECT COUNT(*) as count FROM orders WHERE platform = ?');
-            $stmt->execute([$platform]);
-        } else {
-            $stmt = $pdo->query('SELECT COUNT(*) as count FROM orders');
-        }
-        
-        $result = $stmt->fetch();
-        return $result['count'] ?? 0;
-    } catch (Exception $e) {
-        error_log("dm_orders_count error: " . $e->getMessage());
-        return 0;
-    }
-}
-
-function dm_orders_delete($platform, $order_id) {
-    $pdo = dm_db();
-    if (!$pdo) return false;
-    
-    try {
-        $stmt = $pdo->prepare('DELETE FROM orders WHERE platform = ? AND order_id = ?');
-        $stmt->execute([$platform, $order_id]);
-        return $stmt->rowCount() > 0;
-    } catch (Exception $e) {
-        error_log("dm_orders_delete error: " . $e->getMessage());
-        return false;
+        return ['total_orders' => 0, 'total_sales' => 0, 'avg_order_value' => 0];
     }
 }
 

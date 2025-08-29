@@ -1,10 +1,5 @@
 <?php
 // Database helper using MySQL PDO only
-// Load configuration first
-if (file_exists(__DIR__ . '/config.php')) {
-    require_once __DIR__ . '/config.php';
-}
-
 // Configuration via environment variables:
 // - DM_DB_DSN  e.g. mysql:host=localhost;dbname=dashboard;charset=utf8mb4
 // - DM_DB_USER
@@ -55,20 +50,23 @@ function dm_db() {
         PRIMARY KEY (`scope`, `name`)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci");
 
-    // Ensure orders table exists (compatible with pagination_manager.php)
+    // Ensure orders table exists
     $pdo->exec("CREATE TABLE IF NOT EXISTS `orders` (
-        `id` BIGINT AUTO_INCREMENT PRIMARY KEY,
+        `id` INT AUTO_INCREMENT PRIMARY KEY,
         `platform` VARCHAR(20) NOT NULL,
         `order_id` VARCHAR(100) NOT NULL,
-        `amount` DECIMAL(15,2) DEFAULT 0,
-        `status` VARCHAR(50) NULL,
-        `created_at` VARCHAR(50) NULL,
-        `items` TEXT NULL,
-        `raw_data` TEXT NULL,
-        `fetched_at` BIGINT DEFAULT UNIX_TIMESTAMP(),
-        UNIQUE KEY `uk_orders_platform_orderid` (`platform`, `order_id`),
-        INDEX `idx_orders_platform_created` (`platform`, `created_at` DESC),
-        INDEX `idx_orders_fetched_at` (`fetched_at` DESC)
+        `order_status` VARCHAR(50) NULL,
+        `total_amount` DECIMAL(10,2) NULL,
+        `currency` VARCHAR(10) NULL,
+        `customer_name` VARCHAR(255) NULL,
+        `customer_email` VARCHAR(255) NULL,
+        `created_at` BIGINT NULL,
+        `updated_at` BIGINT NULL,
+        `order_data` JSON NULL,
+        UNIQUE KEY `unique_platform_order` (`platform`, `order_id`),
+        INDEX `idx_platform` (`platform`),
+        INDEX `idx_created_at` (`created_at`),
+        INDEX `idx_order_status` (`order_status`)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci");
 
     return $pdo;

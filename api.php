@@ -18,35 +18,41 @@ if ($isProduction) {
 // Load config if exists
 $config = [];
 if (file_exists(__DIR__ . '/config.php')) {
-    $config = require __DIR__ . '/config.php';
+    require_once __DIR__ . '/config.php';
 }
 
+// Load database functions
+require_once __DIR__ . '/db.php';
+
 // Global error/exception handler for JSON API
-set_exception_handler(function($e) use ($isProduction) {
-    http_response_code(500);
-    header('Content-Type: application/json');
-    
-    if ($isProduction) {
-        // Production: Generic error message
-        echo json_encode([
-            'success' => false,
-            'error' => 'Internal server error',
-            'code' => $e->getCode()
-        ]);
-        // Log detailed error
-        error_log("Dashboard Market Error: " . $e->getMessage() . " in " . $e->getFile() . ":" . $e->getLine());
-    } else {
-        // Development: Detailed error
-        echo json_encode([
-            'success' => false,
-            'error' => $e->getMessage(),
-            'file' => $e->getFile(),
-            'line' => $e->getLine(),
-            'trace' => $e->getTraceAsString()
-        ]);
-    }
-    exit;
-});
+// Only set JSON handler when explicitly requested
+function setJSONErrorHandler($isProduction = false) {
+    set_exception_handler(function($e) use ($isProduction) {
+        http_response_code(500);
+        header('Content-Type: application/json');
+        
+        if ($isProduction) {
+            // Production: Generic error message
+            echo json_encode([
+                'success' => false,
+                'error' => 'Internal server error',
+                'code' => $e->getCode()
+            ]);
+            // Log detailed error
+            error_log("Dashboard Market Error: " . $e->getMessage() . " in " . $e->getFile() . ":" . $e->getLine());
+        } else {
+            // Development: Detailed error
+            echo json_encode([
+                'success' => false,
+                'error' => $e->getMessage(),
+                'file' => $e->getFile(),
+                'line' => $e->getLine(),
+                'trace' => $e->getTraceAsString()
+            ]);
+        }
+        exit;
+    });
+}
 
 set_error_handler(function($errno, $errstr, $errfile, $errline) use ($isProduction) {
     http_response_code(500);
@@ -1106,19 +1112,22 @@ function handle_request() {
     $platform = $_GET['platform'] ?? null;
     $config = getAPIConfig();
 
-    $api = null;
-    if ($platform) {
+    // Function to get API object when needed
+    $getAPI = function($platform) use ($config) {
         switch ($platform) {
-            case 'lazada': $api = new LazadaAPI('lazada', $config['lazada']); break;
-            case 'shopee': $api = new ShopeeAPI('shopee', $config['shopee']); break;
-            case 'tiktok': $api = new TikTokAPI('tiktok', $config['tiktok']); break;
-            default: return ['success' => false, 'error' => 'Unknown platform'];
+            case 'lazada': return new LazadaAPI('lazada', $config['lazada']);
+            case 'shopee': return new ShopeeAPI('shopee', $config['shopee']);
+            case 'tiktok': return new TikTokAPI('tiktok', $config['tiktok']);
+            default: return null;
         }
-    }
+    };
 
     switch ($action) {
         case 'getSummary':
             if (!$platform) return ['success' => false, 'error' => 'Platform required'];
+            $api = $getAPI($platform);
+            if (!$api) return ['success' => false, 'error' => 'Unknown platform'];
+            
             try {
                 $startTime = microtime(true);
                 $date_from = $_GET['date_from'] ?? date('Y-m-d');
@@ -1141,7 +1150,8 @@ function handle_request() {
                     ]];
                 } else {
                     // ข้อมูลเก่า หรือไม่มีข้อมูล -> ดึงจาก API
-                    if (!$api) return ['success' => false, 'error' => 'API instance required'];
+                    $api = $getAPI($platform);
+                    if (!$api) return ['success' => false, 'error' => 'Unknown platform'];
                     
                     try {
                         if (method_exists($api, 'getOrders')) {
@@ -1204,7 +1214,8 @@ function handle_request() {
                     return ['success' => true, 'data' => $orders];
                 } else {
                     // ข้อมูลเก่าหรือไม่มีข้อมูล -> ดึงจาก API
-                    if (!$api) return ['success' => false, 'error' => 'API instance required'];
+                    $api = $getAPI($platform);
+                    if (!$api) return ['success' => false, 'error' => 'Unknown platform'];
                     
                     try {
                         $orders = $api->getOrders($date_from, $date_to, $limit);
@@ -1282,29 +1293,92 @@ function handle_request() {
 
         case 'get_settings':
             if (!$platform) return ['success' => false, 'error' => 'Platform required'];
-            $settings = dm_settings_get_all($platform);
-            return ['success' => true, 'data' => $settings];
+            
+            try {
+                $settings = dm_settings_get_all($platform);
+                
+                // Debug info for MySQL migration
+                error_log("API get_settings [$platform]: Retrieved " . count($settings) . " settings");
+                
+                return ['success' => true, 'data' => $settings, 'debug' => [
+                    'platform' => $platform,
+                    'count' => count($settings),
+                    'db_type' => class_exists('PDO') ? 'PDO_Available' : 'PDO_Missing',
+                    'timestamp' => date('Y-m-d H:i:s')
+                ]];
+            } catch (Exception $e) {
+                error_log("API get_settings [$platform] error: " . $e->getMessage());
+                return ['success' => false, 'error' => 'Database error: ' . $e->getMessage()];
+            }
 
         case 'save_settings':
             if (!$platform) return ['success' => false, 'error' => 'Platform required'];
+            
             $data = json_decode(file_get_contents('php://input'), true);
             if (!$data) return ['success' => false, 'error' => 'Invalid data'];
 
-            // Convert boolean 'enabled' to string 'true'/'false' before saving
-            if (isset($data['enabled'])) {
-                $data['enabled'] = $data['enabled'] ? 'true' : 'false';
-            }
-            
-            foreach($data as $key => $value){
-                dm_settings_set($platform, $key, is_bool($value) ? ($value ? 'true' : 'false') : $value);
-            }
-            // Also save to cookie for immediate UI feedback on non-sensitive fields
-            if(isset($data['enabled'])) setcookie($platform.'_enabled', $data['enabled'], time()+3600*24*365, '/');
+            try {
+                // Debug info for MySQL migration  
+                error_log("API save_settings [$platform]: Saving " . count($data) . " settings");
+                error_log("API save_settings [$platform]: Data = " . json_encode($data));
+                
+                $saved_count = 0;
+                $errors = [];
+                
+                // Convert boolean 'enabled' to string 'true'/'false' before saving
+                if (isset($data['enabled'])) {
+                    $data['enabled'] = $data['enabled'] ? 'true' : 'false';
+                }
+                
+                foreach($data as $key => $value) {
+                    try {
+                        $final_value = is_bool($value) ? ($value ? 'true' : 'false') : $value;
+                        $result = dm_settings_set($platform, $key, $final_value);
+                        
+                        if ($result) {
+                            $saved_count++;
+                            error_log("API save_settings [$platform]: Saved $key = " . substr($final_value, 0, 50));
+                        } else {
+                            $errors[] = "Failed to save $key";
+                            error_log("API save_settings [$platform]: Failed to save $key");
+                        }
+                    } catch (Exception $e) {
+                        $errors[] = "$key: " . $e->getMessage();
+                        error_log("API save_settings [$platform]: Error saving $key: " . $e->getMessage());
+                    }
+                }
+                
+                // Also save to cookie for immediate UI feedback on non-sensitive fields
+                if(isset($data['enabled'])) {
+                    setcookie($platform.'_enabled', $data['enabled'], time()+3600*24*365, '/');
+                }
 
-            return ['success' => true, 'message' => 'Settings saved'];
+                if (count($errors) > 0) {
+                    return ['success' => false, 'error' => 'Some settings failed: ' . implode(', ', $errors), 'debug' => [
+                        'saved_count' => $saved_count,
+                        'total_count' => count($data),
+                        'errors' => $errors
+                    ]];
+                }
+
+                return ['success' => true, 'message' => 'Settings saved', 'debug' => [
+                    'platform' => $platform,
+                    'saved_count' => $saved_count,
+                    'total_count' => count($data),
+                    'db_type' => dm_get_db_type(),
+                    'timestamp' => date('Y-m-d H:i:s')
+                ]];
+                
+            } catch (Exception $e) {
+                error_log("API save_settings [$platform] fatal error: " . $e->getMessage());
+                return ['success' => false, 'error' => 'Database error: ' . $e->getMessage()];
+            }
 
         case 'test_connection':
-            if (!$api) return ['success' => false, 'error' => 'Platform required'];
+            if (!$platform) return ['success' => false, 'error' => 'Platform required'];
+            $api = $getAPI($platform);
+            if (!$api) return ['success' => false, 'error' => 'Unknown platform'];
+            
             try {
                 // Pass through any extra params from the request
                 $params = $_GET;
@@ -1330,11 +1404,53 @@ function handle_request() {
             $info = dm_curl_probe_run($target);
             return ['success'=>true, 'data'=>$info];
 
+        case 'db_info':
+            try {
+                $info = dm_get_db_info();
+                
+                // Test table existence
+                $db = dm_db();
+                if ($db) {
+                    try {
+                        $driver = $db->getAttribute(PDO::ATTR_DRIVER_NAME);
+                        
+                        if ($driver === 'mysql') {
+                            $stmt = $db->query("SHOW TABLES LIKE 'dm_settings'");
+                            $tableExists = $stmt->rowCount() > 0;
+                        } elseif ($driver === 'sqlsrv') {
+                            $stmt = $db->query("SELECT COUNT(*) as count FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_NAME = 'dm_settings'");
+                            $result = $stmt->fetch();
+                            $tableExists = $result['count'] > 0;
+                        } else { // sqlite
+                            $stmt = $db->query("SELECT name FROM sqlite_master WHERE type='table' AND name='dm_settings'");
+                            $tableExists = $stmt->rowCount() > 0;
+                        }
+                        
+                        $info['table_exists'] = $tableExists;
+                        
+                        if ($tableExists) {
+                            $stmt = $db->query("SELECT COUNT(*) as count FROM dm_settings");
+                            $result = $stmt->fetch();
+                            $info['record_count'] = $result['count'];
+                        }
+                        
+                    } catch (Exception $e) {
+                        $info['table_check_error'] = $e->getMessage();
+                    }
+                }
+                
+                return ['success' => true, 'data' => $info];
+            } catch (Exception $e) {
+                return ['success' => false, 'error' => 'Database info error: ' . $e->getMessage()];
+            }
+
         default:
             return ['success' => false, 'error' => 'Invalid action'];
     }
 }
 
-// Main execution
-header('Content-Type: application/json');
-echo json_encode(handle_request());
+// Main execution - Only handle JSON requests when called directly
+if (basename($_SERVER['SCRIPT_NAME']) === 'api.php' || isset($_REQUEST['api_request'])) {
+    header('Content-Type: application/json');
+    echo json_encode(handle_request());
+}

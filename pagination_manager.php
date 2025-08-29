@@ -25,63 +25,30 @@ class PaginationManager {
     }
     
     /**
-     * สร้างตาราง orders หากยังไม่มี
+     * สร้างตาราง orders หากยังไม่มี (MySQL only)
      */
     private function initOrdersTable() {
-        $driver = $this->pdo->getAttribute(PDO::ATTR_DRIVER_NAME);
-        
-        if ($driver === 'sqlite') {
-            $sql = "CREATE TABLE IF NOT EXISTS orders (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                platform TEXT NOT NULL,
-                order_id TEXT NOT NULL,
-                amount DECIMAL(15,2) DEFAULT 0,
-                status TEXT,
-                created_at TEXT,
-                items TEXT, -- JSON encoded
-                raw_data TEXT, -- JSON encoded original data
-                fetched_at INTEGER DEFAULT (strftime('%s', 'now')),
-                UNIQUE(platform, order_id)
-            )";
-        } elseif ($driver === 'sqlsrv') {
-            $sql = "IF NOT EXISTS (SELECT * FROM sys.objects WHERE object_id = OBJECT_ID(N'[dbo].[orders]') AND type in (N'U'))
-            BEGIN
-                CREATE TABLE [dbo].[orders] (
-                    [id] BIGINT IDENTITY(1,1) PRIMARY KEY,
-                    [platform] NVARCHAR(20) NOT NULL,
-                    [order_id] NVARCHAR(100) NOT NULL,
-                    [amount] DECIMAL(15,2) DEFAULT 0,
-                    [status] NVARCHAR(50),
-                    [created_at] NVARCHAR(50),
-                    [items] NVARCHAR(MAX), -- JSON encoded
-                    [raw_data] NVARCHAR(MAX), -- JSON encoded original data
-                    [fetched_at] BIGINT DEFAULT DATEDIFF(second, '1970-01-01', GETUTCDATE()),
-                    CONSTRAINT [UK_orders_platform_orderid] UNIQUE ([platform], [order_id])
-                )
-            END";
-        } else {
-            $sql = "CREATE TABLE IF NOT EXISTS orders (
-                id BIGINT AUTO_INCREMENT PRIMARY KEY,
-                platform VARCHAR(20) NOT NULL,
-                order_id VARCHAR(100) NOT NULL,
-                amount DECIMAL(15,2) DEFAULT 0,
-                status VARCHAR(50),
-                created_at VARCHAR(50),
-                items TEXT, -- JSON encoded
-                raw_data TEXT, -- JSON encoded original data
-                fetched_at BIGINT DEFAULT UNIX_TIMESTAMP(),
-                UNIQUE KEY uk_orders_platform_orderid (platform, order_id)
-            )";
-        }
+        $sql = "CREATE TABLE IF NOT EXISTS orders (
+            id BIGINT AUTO_INCREMENT PRIMARY KEY,
+            platform VARCHAR(20) NOT NULL,
+            order_id VARCHAR(100) NOT NULL,
+            amount DECIMAL(15,2) DEFAULT 0,
+            status VARCHAR(50),
+            created_at VARCHAR(50),
+            items TEXT,
+            raw_data TEXT,
+            fetched_at BIGINT DEFAULT UNIX_TIMESTAMP(),
+            UNIQUE KEY uk_orders_platform_orderid (platform, order_id)
+        )";
         
         $this->pdo->exec($sql);
         
-        // Create index for performance
+        // Create indexes for performance
         try {
             $this->pdo->exec("CREATE INDEX IF NOT EXISTS idx_orders_platform_created ON orders (platform, created_at DESC)");
             $this->pdo->exec("CREATE INDEX IF NOT EXISTS idx_orders_fetched_at ON orders (fetched_at DESC)");
         } catch (Exception $e) {
-            // Index might already exist, ignore
+            // Indexes might already exist, ignore
         }
     }
     
@@ -314,20 +281,17 @@ class PaginationManager {
         if (empty($orders)) return 0;
         
         $saved = 0;
+        // Use MySQL INSERT ... ON DUPLICATE KEY UPDATE
         $stmt = $this->pdo->prepare(
-            "INSERT OR IGNORE INTO orders (platform, order_id, amount, status, created_at, items, raw_data, fetched_at)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
+            "INSERT INTO orders (platform, order_id, amount, status, created_at, items, raw_data, fetched_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+             ON DUPLICATE KEY UPDATE 
+                amount = VALUES(amount),
+                status = VALUES(status),
+                items = VALUES(items),
+                raw_data = VALUES(raw_data),
+                fetched_at = VALUES(fetched_at)"
         );
-        
-        // For SQL Server, use different syntax
-        $driver = $this->pdo->getAttribute(PDO::ATTR_DRIVER_NAME);
-        if ($driver === 'sqlsrv') {
-            $stmt = $this->pdo->prepare(
-                "IF NOT EXISTS (SELECT 1 FROM orders WHERE platform = ? AND order_id = ?)
-                 INSERT INTO orders (platform, order_id, amount, status, created_at, items, raw_data, fetched_at)
-                 VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
-            );
-        }
         
         foreach ($orders as $order) {
             try {
@@ -341,14 +305,6 @@ class PaginationManager {
                     json_encode($order['raw_data'], JSON_UNESCAPED_UNICODE),
                     time()
                 ];
-                
-                if ($driver === 'sqlsrv') {
-                    // For SQL Server, duplicate parameters for the EXISTS check
-                    $params = array_merge(
-                        [$order['platform'], $order['order_id']], // for EXISTS check
-                        $params // for INSERT
-                    );
-                }
                 
                 if ($stmt->execute($params)) {
                     $saved++;

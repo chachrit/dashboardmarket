@@ -77,6 +77,9 @@ $settings = [
                         </div>
                     </div>
                     <div class="flex items-center space-x-4 animate-fadeIn">
+                        <button onclick="checkDatabaseStatus()" class="bg-gradient-to-r from-purple-500 to-purple-600 text-white px-6 py-3 rounded-xl hover:from-purple-600 hover:to-purple-700 transform hover:scale-105 transition-all duration-200 shadow-lg hover:shadow-xl">
+                            <i class="fas fa-database mr-2"></i>ตรวจสอบฐานข้อมูล
+                        </button>
                         <button onclick="saveAllSettings()" class="bg-gradient-to-r from-green-500 to-green-600 text-white px-6 py-3 rounded-xl hover:from-green-600 hover:to-green-700 transform hover:scale-105 transition-all duration-200 shadow-lg hover:shadow-xl">
                             <i class="fas fa-save mr-2"></i>บันทึกทั้งหมด
                         </button>
@@ -270,25 +273,28 @@ $settings = [
     </div>
 
     <script>
-        function showMessage(message, type = 'success') {
+        function showMessage(message, type = 'success', timeout = 5000) {
             const messageEl = document.getElementById('message');
             const typeClasses = {
-                success: 'bg-green-100 text-green-800',
-                error: 'bg-red-100 text-red-800',
-                info: 'bg-blue-100 text-blue-800'
+                success: 'bg-green-100 text-green-800 border-green-200',
+                error: 'bg-red-100 text-red-800 border-red-200',
+                info: 'bg-blue-100 text-blue-800 border-blue-200'
             };
             const iconClasses = {
                 success: 'fa-check-circle',
                 error: 'fa-exclamation-circle',
                 info: 'fa-info-circle'
             };
-            messageEl.className = `mb-6 p-4 rounded-lg ${typeClasses[type] || typeClasses['info']} animate-slideInRight`;
-            messageEl.innerHTML = `<i class="fas ${iconClasses[type] || iconClasses['info']} mr-2"></i>${message}`;
+            messageEl.className = `mb-6 p-4 rounded-lg border ${typeClasses[type] || typeClasses['info']} animate-slideInRight`;
+            messageEl.innerHTML = `<i class="fas ${iconClasses[type] || iconClasses['info']} mr-2"></i><div style="display: inline-block;">${message}</div>`;
             messageEl.classList.remove('hidden');
             
-            setTimeout(() => {
-                messageEl.classList.add('hidden');
-            }, 5000);
+            // Auto-hide after specified timeout
+            if (timeout > 0) {
+                setTimeout(() => {
+                    messageEl.classList.add('hidden');
+                }, timeout);
+            }
         }
 
         function getSettingsFromForm(platform) {
@@ -327,10 +333,23 @@ $settings = [
 
         async function saveSettings(platform) {
             const settings = getSettingsFromForm(platform);
+            
+            // Add loading indicator
+            const saveButton = document.querySelector(`button[onclick="saveSettings('${platform}')"]`);
+            const originalText = saveButton.innerHTML;
+            saveButton.innerHTML = '<i class="fas fa-spinner fa-spin mr-2"></i>กำลังบันทึก...';
+            saveButton.disabled = true;
+            
             try {
+                // Add debug info for MySQL migration
+                console.log(`[${platform}] Saving settings:`, settings);
+                
                 const response = await fetch(`api.php?action=save_settings&platform=${platform}`, {
                     method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
+                    headers: { 
+                        'Content-Type': 'application/json',
+                        'X-Requested-With': 'XMLHttpRequest'
+                    },
                     body: JSON.stringify(settings)
                 });
                 
@@ -339,16 +358,40 @@ $settings = [
                 }
                 
                 const j = await response.json();
+                console.log(`[${platform}] Save response:`, j);
+                
                 if (j.success) {
-                    showMessage(`บันทึก ${platform} เรียบร้อย`, 'success');
+                    showMessage(`✅ บันทึก ${platform} เรียบร้อย`, 'success');
+                    
+                    // Verify data was saved by fetching it back
+                    await verifySettingsSaved(platform);
                 } else {
-                    showMessage(`บันทึก ${platform} ล้มเหลว: ${j.error || j.message}`, 'error');
+                    showMessage(`❌ บันทึก ${platform} ล้มเหลว: ${j.error || j.message}`, 'error');
                 }
                 return j;
             } catch (err) {
-                console.error('Save settings error:', err);
-                showMessage(`บันทึก ${platform} ล้มเหลว: ${err.message}`, 'error');
+                console.error(`[${platform}] Save settings error:`, err);
+                showMessage(`❌ บันทึก ${platform} ล้มเหลว: ${err.message}`, 'error');
                 throw err;
+            } finally {
+                // Restore button state
+                saveButton.innerHTML = originalText;
+                saveButton.disabled = false;
+            }
+        }
+
+        async function verifySettingsSaved(platform) {
+            try {
+                const response = await fetch(`api.php?action=get_settings&platform=${platform}`);
+                if (response.ok) {
+                    const j = await response.json();
+                    if (j.success && j.data) {
+                        console.log(`[${platform}] Verification - data in DB:`, j.data);
+                        showMessage(`🔍 ยืนยันข้อมูล ${platform} ถูกบันทึกลงฐานข้อมูลแล้ว`, 'info');
+                    }
+                }
+            } catch (err) {
+                console.warn(`[${platform}] Verification failed:`, err);
             }
         }
 
@@ -423,6 +466,86 @@ $settings = [
             } catch (error) {
                 console.error('Test connection error:', error);
                 showMessage(`ทดสอบ ${platform} ล้มเหลว: ${error.message}`, 'error');
+            }
+        }
+
+        async function checkDatabaseStatus() {
+            showMessage('🔍 กำลังตรวจสอบสถานะฐานข้อมูล...', 'info');
+            
+            try {
+                const response = await fetch('api.php?action=db_info');
+                if (!response.ok) {
+                    throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+                }
+                
+                const result = await response.json();
+                
+                if (result.success && result.data) {
+                    const info = result.data;
+                    let statusHtml = `
+                        <div style="background: #f0f8ff; padding: 15px; border: 1px solid #0066cc; border-radius: 8px; margin: 10px 0;">
+                            <h4 style="margin: 0 0 10px 0; color: #0066cc;">📊 สถานะฐานข้อมูล</h4>
+                            <p><strong>ประเภท:</strong> ${info.type?.toUpperCase() || 'Unknown'}</p>
+                            <p><strong>สถานะ:</strong> ${info.status === 'connected' ? '✅ เชื่อมต่อแล้ว' : '❌ ไม่เชื่อมต่อ'}</p>
+                            ${info.version ? `<p><strong>เวอร์ชัน:</strong> ${info.version}</p>` : ''}
+                            ${info.database ? `<p><strong>ฐานข้อมูล:</strong> ${info.database}</p>` : ''}
+                            ${info.table_exists !== undefined ? `<p><strong>ตาราง dm_settings:</strong> ${info.table_exists ? '✅ พบแล้ว' : '❌ ไม่พบ'}</p>` : ''}
+                            ${info.record_count !== undefined ? `<p><strong>จำนวน records:</strong> ${info.record_count}</p>` : ''}
+                            ${info.error ? `<p style="color: red;"><strong>Error:</strong> ${info.error}</p>` : ''}
+                        </div>
+                    `;
+                    
+                    showMessage(statusHtml, info.status === 'connected' ? 'success' : 'error');
+                    
+                    // Also test settings functions
+                    if (info.status === 'connected' && info.table_exists) {
+                        await testSettingsFunctions();
+                    }
+                } else {
+                    showMessage('❌ ไม่สามารถตรวจสอบสถานะฐานข้อมูลได้: ' + (result.error || 'Unknown error'), 'error');
+                }
+            } catch (error) {
+                console.error('Database status check error:', error);
+                showMessage('❌ เกิดข้อผิดพลาดในการตรวจสอบฐานข้อมูล: ' + error.message, 'error');
+            }
+        }
+
+        async function testSettingsFunctions() {
+            try {
+                showMessage('🧪 ทดสอบฟังก์ชัน settings...', 'info');
+                
+                // Test save
+                const testData = {
+                    test_key: 'test_value_' + Date.now(),
+                    enabled: 'true'
+                };
+                
+                const saveResponse = await fetch('api.php?action=save_settings&platform=test_platform', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(testData)
+                });
+                
+                const saveResult = await saveResponse.json();
+                
+                if (saveResult.success) {
+                    showMessage('✅ ทดสอบ save_settings สำเร็จ', 'success');
+                    
+                    // Test get
+                    const getResponse = await fetch('api.php?action=get_settings&platform=test_platform');
+                    const getResult = await getResponse.json();
+                    
+                    if (getResult.success && getResult.data && getResult.data.test_key === testData.test_key) {
+                        showMessage('✅ ทดสอบ get_settings สำเร็จ - ข้อมูลตรงกัน', 'success');
+                    } else {
+                        showMessage('⚠️ ทดสอบ get_settings - ข้อมูลไม่ตรงกัน', 'error');
+                    }
+                } else {
+                    showMessage('❌ ทดสอบ save_settings ล้มเหลว: ' + (saveResult.error || 'Unknown error'), 'error');
+                }
+                
+            } catch (error) {
+                showMessage('❌ ทดสอบฟังก์ชัน settings ล้มเหลว: ' + error.message, 'error');
             }
         }
 
