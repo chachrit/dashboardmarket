@@ -18,7 +18,7 @@ function dm_db() {
 
     if (!$dsn) {
         $server = getenv('DM_DB_SERVER') ?: 'localhost';
-        $name   = getenv('DM_DB_NAME')   ?: 'dashboard';
+        $name   = getenv('DM_DB_NAME')   ?: 'realtime_marketplace';
         $user   = getenv('DM_DB_USER')   ?: 'sa';
         $pass   = getenv('DM_DB_PASS')   ?: 'Journal@25';
         $dsn = 'sqlsrv:Server=' . $server . ';Database=' . $name;

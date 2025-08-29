@@ -191,6 +191,117 @@ function dm_curl_probe_run($url, $resolveHost = null, $resolveIp = null){
 }
 
 // ------------------------------
+// Database-based Order Functions
+// ------------------------------
+
+/**
+ * ดึงข้อมูลออเดอร์จากฐานข้อมูลแทนการยิง API
+ */
+function getOrdersFromDatabase($platform, $date_from = null, $date_to = null, $limit = 100) {
+    $pdo = dm_db();
+    
+    if (!$date_from) $date_from = date('Y-m-d');
+    if (!$date_to) $date_to = date('Y-m-d');
+    
+    $sql = "SELECT * FROM orders 
+            WHERE platform = ? 
+            AND created_at >= ? 
+            AND created_at <= ?
+            ORDER BY created_at DESC 
+            LIMIT ?";
+            
+    $stmt = $pdo->prepare($sql);
+    $stmt->execute([
+        $platform,
+        $date_from . ' 00:00:00',
+        $date_to . ' 23:59:59',
+        $limit
+    ]);
+    
+    $orders = [];
+    $totalSales = 0;
+    
+    while ($row = $stmt->fetch()) {
+        $items = json_decode($row['items'], true) ?: [];
+        
+        $orders[] = [
+            'platform' => $row['platform'],
+            'order_id' => $row['order_id'],
+            'amount' => (float)$row['amount'],
+            'status' => $row['status'],
+            'created_at' => $row['created_at'],
+            'items' => $items,
+            'product' => !empty($items) ? $items[0]['name'] : 'N/A' // for backward compatibility
+        ];
+        $totalSales += (float)$row['amount'];
+    }
+    
+    return [
+        'total_sales' => $totalSales,
+        'total_orders' => count($orders),
+        'orders' => $orders,
+        'source' => 'database'
+    ];
+}
+
+/**
+ * ตรวจสอบว่าข้อมูลในฐานข้อมูลเก่าหรือไม่
+ */
+function isDatabaseDataFresh($platform, $maxAgeMinutes = 30) {
+    $pdo = dm_db();
+    
+    $sql = "SELECT MAX(fetched_at) as last_fetch FROM orders WHERE platform = ?";
+    $stmt = $pdo->prepare($sql);
+    $stmt->execute([$platform]);
+    $result = $stmt->fetch();
+    
+    if (!$result || !$result['last_fetch']) {
+        return false; // ไม่มีข้อมูลเลย
+    }
+    
+    $lastFetch = (int)$result['last_fetch'];
+    $now = time();
+    $ageMinutes = ($now - $lastFetch) / 60;
+    
+    return $ageMinutes <= $maxAgeMinutes;
+}
+
+/**
+ * ดึงสถิติรวมจากฐานข้อมูล
+ */
+function getDatabaseStats($platform, $date_from = null, $date_to = null) {
+    $pdo = dm_db();
+    
+    if (!$date_from) $date_from = date('Y-m-d');
+    if (!$date_to) $date_to = date('Y-m-d');
+    
+    $sql = "SELECT 
+                COUNT(*) as total_orders,
+                COALESCE(SUM(amount), 0) as total_sales,
+                MAX(fetched_at) as last_fetch_time
+            FROM orders 
+            WHERE platform = ?
+            AND created_at >= ?
+            AND created_at <= ?";
+            
+    $stmt = $pdo->prepare($sql);
+    $stmt->execute([
+        $platform,
+        $date_from . ' 00:00:00',
+        $date_to . ' 23:59:59'
+    ]);
+    
+    $stats = $stmt->fetch();
+    
+    return [
+        'totalOrders' => (int)$stats['total_orders'],
+        'totalSales' => (float)$stats['total_sales'],
+        'lastFetchTime' => $stats['last_fetch_time'] ? date('Y-m-d H:i:s', $stats['last_fetch_time']) : null,
+        'source' => 'database'
+    ];
+}
+
+// ------------------------------
 // Config Loader
 // ------------------------------
 function getAPIConfig() {
@@ -1007,67 +1118,129 @@ function handle_request() {
 
     switch ($action) {
         case 'getSummary':
-            if (!$api) return ['success' => false, 'error' => 'Platform required'];
+            if (!$platform) return ['success' => false, 'error' => 'Platform required'];
             try {
                 $startTime = microtime(true);
+                $date_from = $_GET['date_from'] ?? date('Y-m-d');
+                $date_to = $_GET['date_to'] ?? date('Y-m-d');
                 
-                // Try summary mode first for speed, fallback to full mode
-                try {
-                    if (method_exists($api, 'getOrders')) {
-                        $reflection = new ReflectionMethod($api, 'getOrders');
-                        $params = $reflection->getParameters();
-                        if (count($params) >= 4) {
-                            // Support summaryOnly parameter - ใช้ limit 100 แต่ summaryOnly=true
-                            $summary = $api->getOrders(null, null, 100, true); // summaryOnly = true
+                // ตรวจสอบข้อมูลในฐานข้อมูลก่อน (ลด cache time เป็น 5 นาที เพื่อให้ข้อมูลใหม่สำหรับร้านขนาดใหญ่)
+                if (isDatabaseDataFresh($platform, 5)) {
+                    // ใช้ข้อมูลจากฐานข้อมูล (fresh ภายใน 5 นาที)
+                    $summary = getDatabaseStats($platform, $date_from, $date_to);
+                    $loadTime = round((microtime(true) - $startTime) * 1000, 2);
+                    
+                    error_log("[getSummary] Platform: $platform, Source: database (fresh), Orders: " . $summary['totalOrders'] . ", Load Time: {$loadTime}ms (5min cache)");
+                    
+                    return ['success' => true, 'data' => [
+                        'totalSales' => $summary['totalSales'],
+                        'totalOrders' => $summary['totalOrders'],
+                        'loadTime' => $loadTime,
+                        'source' => 'database',
+                        'lastFetch' => $summary['lastFetchTime']
+                    ]];
+                } else {
+                    // ข้อมูลเก่า หรือไม่มีข้อมูล -> ดึงจาก API
+                    if (!$api) return ['success' => false, 'error' => 'API instance required'];
+                    
+                    try {
+                        if (method_exists($api, 'getOrders')) {
+                            $reflection = new ReflectionMethod($api, 'getOrders');
+                            $params = $reflection->getParameters();
+                            if (count($params) >= 4) {
+                                $summary = $api->getOrders($date_from, $date_to, 100, true); // summaryOnly
+                            } else {
+                                $summary = $api->getOrders($date_from, $date_to, 100);
+                            }
                         } else {
-                            $summary = $api->getOrders(null, null, 100);
+                            $summary = $api->getOrders($date_from, $date_to, 100);
                         }
-                    } else {
-                        $summary = $api->getOrders(null, null, 100);
+                    } catch (Exception $e) {
+                        error_log("[getSummary] API call failed for $platform, trying database fallback: " . $e->getMessage());
+                        $summary = getDatabaseStats($platform, $date_from, $date_to);
+                        
+                        return ['success' => true, 'data' => [
+                            'totalSales' => $summary['totalSales'],
+                            'totalOrders' => $summary['totalOrders'],
+                            'loadTime' => round((microtime(true) - $startTime) * 1000, 2),
+                            'source' => 'database_fallback',
+                            'note' => 'API failed, using cached data'
+                        ]];
                     }
-                } catch (Exception $e) {
-                    // Fallback to standard mode if summary fails
-                    error_log("[getSummary] Summary mode failed for $platform, falling back to standard mode: " . $e->getMessage());
-                    $summary = $api->getOrders(null, null, 100);
+                    
+                    $loadTime = round((microtime(true) - $startTime) * 1000, 2);
+                    
+                    error_log("[getSummary] Platform: $platform, Source: API, Orders: " . $summary['total_orders'] . ", Load Time: {$loadTime}ms");
+                    
+                    return ['success' => true, 'data' => [
+                        'totalSales' => $summary['total_sales'],
+                        'totalOrders' => $summary['total_orders'],
+                        'loadTime' => $loadTime,
+                        'source' => 'api'
+                    ]];
                 }
-                
-                $loadTime = round((microtime(true) - $startTime) * 1000, 2);
-                
-                // Debug logging
-                error_log("[getSummary] Platform: $platform, Total Orders: " . $summary['total_orders'] . ", Total Sales: " . $summary['total_sales'] . ", Load Time: {$loadTime}ms");
-                
-                return ['success' => true, 'data' => [
-                    'totalSales' => $summary['total_sales'],
-                    'totalOrders' => $summary['total_orders'],
-                    'loadTime' => $loadTime
-                ]];
             } catch (Exception $e) {
                 error_log("[getSummary] Platform: $platform, Error: " . $e->getMessage());
                 return ['success' => false, 'error' => $e->getMessage()];
             }
 
         case 'getOrders':
-            if (!$api) return ['success' => false, 'error' => 'Platform required'];
+            if (!$platform) return ['success' => false, 'error' => 'Platform required'];
             try {
                 $startTime = microtime(true);
-                $date_from = $_GET['date_from'] ?? null;
-                $date_to = $_GET['date_to'] ?? null;
-                $limit = (int)($_GET['limit'] ?? 200); // เพิ่มเป็น 200 สำหรับ frontend (สมดุลระหว่างความเร็วและข้อมูล)
-                $orders = $api->getOrders($date_from, $date_to, $limit);
-                $loadTime = round((microtime(true) - $startTime) * 1000, 2);
+                $date_from = $_GET['date_from'] ?? date('Y-m-d');
+                $date_to = $_GET['date_to'] ?? date('Y-m-d');
+                $limit = (int)($_GET['limit'] ?? 100);
                 
-                // Add load time to response
-                $orders['loadTime'] = $loadTime;
-                error_log("[getOrders] Platform: $platform, Limit: $limit, Orders: " . count($orders['orders'] ?? []) . ", Load Time: {$loadTime}ms");
-                
-                return ['success' => true, 'data' => $orders];
+                // ตรวจสอบว่าข้อมูลในฐานข้อมูลยังใหม่หรือไม่ (ลดเป็น 5 นาทีสำหรับร้านขนาดใหญ่)
+                if (isDatabaseDataFresh($platform, 5)) {
+                    // ใช้ข้อมูลจากฐานข้อมูล
+                    $orders = getOrdersFromDatabase($platform, $date_from, $date_to, $limit);
+                    $loadTime = round((microtime(true) - $startTime) * 1000, 2);
+                    
+                    $orders['loadTime'] = $loadTime;
+                    error_log("[getOrders] Platform: $platform, Source: database (fresh), Orders: " . count($orders['orders']) . ", Load Time: {$loadTime}ms");
+                    
+                    return ['success' => true, 'data' => $orders];
+                } else {
+                    // ข้อมูลเก่าหรือไม่มีข้อมูล -> ดึงจาก API
+                    if (!$api) return ['success' => false, 'error' => 'API instance required'];
+                    
+                    try {
+                        $orders = $api->getOrders($date_from, $date_to, $limit);
+                        $loadTime = round((microtime(true) - $startTime) * 1000, 2);
+                        
+                        $orders['loadTime'] = $loadTime;
+                        $orders['source'] = 'api';
+                        
+                        error_log("[getOrders] Platform: $platform, Source: API, Orders: " . count($orders['orders'] ?? []) . ", Load Time: {$loadTime}ms");
+                        
+                        return ['success' => true, 'data' => $orders];
+                    } catch (Exception $e) {
+                        // API failed, fallback to database
+                        error_log("[getOrders] API failed for $platform, using database fallback: " . $e->getMessage());
+                        
+                        $orders = getOrdersFromDatabase($platform, $date_from, $date_to, $limit);
+                        $loadTime = round((microtime(true) - $startTime) * 1000, 2);
+                        
+                        $orders['loadTime'] = $loadTime;
+                        $orders['source'] = 'database_fallback';
+                        $orders['note'] = 'API failed, using cached data';
+                        
+                        if (empty($orders['orders'])) {
+                            return ['success' => false, 'error' => 'No data available: ' . $e->getMessage()];
+                        }
+                        
+                        return ['success' => true, 'data' => $orders];
+                    }
+                }
             } catch (Exception $e) {
                 return ['success' => false, 'error' => $e->getMessage()];
             }
 
         case 'getRecentActivity':
             $startTime = microtime(true);
-            // Fetch from all enabled platforms and merge (ใช้ limit เล็กเพื่อความเร็ว)
+            // ดึงจากฐานข้อมูลแทนการยิง API ทุกแพลตฟอร์ม
             $allActivity = [];
             $platforms = ['shopee', 'lazada', 'tiktok'];
             $enabledCount = 0;
@@ -1077,31 +1250,35 @@ function handle_request() {
                 if(isset($p_conf['enabled']) && $p_conf['enabled']==='true'){
                     $enabledCount++;
                     try {
-                        $p_api = null;
-                        if($p==='lazada') $p_api = new LazadaAPI('lazada', $config['lazada']);
-                        if($p==='shopee') $p_api = new ShopeeAPI('shopee', $config['shopee']);
-                        // if($p==='tiktok') $p_api = new TikTokAPI('tiktok', $config['tiktok']); // disabled for now
+                        // ดึงจากฐานข้อมูลก่อน (เร็วกว่า)
+                        $orders = getOrdersFromDatabase($p, date('Y-m-d'), date('Y-m-d'), 5);
                         
-                        if($p_api){
-                            // ลด limit เหลือ 15 เพื่อความเร็ว
-                            $res = $p_api->getOrders(null,null,15); 
-                            if(!empty($res['orders'])) {
-                                // เอาแค่ order ล่าสุด 5 ตัวต่อแพลตฟอร์ม
-                                $recentOrders = array_slice($res['orders'], 0, 5);
-                                $allActivity = array_merge($allActivity, $recentOrders);
-                            }
+                        if(!empty($orders['orders'])) {
+                            $allActivity = array_merge($allActivity, $orders['orders']);
                         }
                     } catch(Exception $e){
-                        error_log("[getRecentActivity] Error fetching from $p: " . $e->getMessage());
-                        // Ignore errors from one platform
+                        error_log("[getRecentActivity] Database query failed for $p: " . $e->getMessage());
                     }
                 }
             }
             
-            $loadTime = round((microtime(true) - $startTime) * 1000, 2);
-            error_log("[getRecentActivity] Loaded " . count($allActivity) . " activities from $enabledCount platforms in {$loadTime}ms");
+            // Sort by created_at desc
+            usort($allActivity, function($a, $b) {
+                return strtotime($b['created_at']) - strtotime($a['created_at']);
+            });
             
-            return ['success'=>true, 'data'=>$allActivity, 'loadTime'=>$loadTime];
+            // Take only top 10 most recent
+            $allActivity = array_slice($allActivity, 0, 10);
+            
+            $loadTime = round((microtime(true) - $startTime) * 1000, 2);
+            error_log("[getRecentActivity] Enabled platforms: $enabledCount, Recent orders: " . count($allActivity) . ", Load Time: {$loadTime}ms");
+            
+            return ['success' => true, 'data' => [
+                'recent_orders' => $allActivity,
+                'enabled_platforms' => $enabledCount,
+                'loadTime' => $loadTime,
+                'source' => 'database'
+            ]];
 
         case 'get_settings':
             if (!$platform) return ['success' => false, 'error' => 'Platform required'];

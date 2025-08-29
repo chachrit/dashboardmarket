@@ -435,7 +435,7 @@ $useMock = isset($_GET['use_mock']) && $_GET['use_mock']=='1';
                     .then(r=>r.json())
                     .then(d=>{ if(d.success && d.data.orders){ displayRecentOrders(d.data.orders); updateTimestamp(); } })
                     .catch(()=>{});
-            },30000); // เปลี่ยนจาก 15000ms (15 วิ) เป็น 30000ms (30 วิ)
+            },15000); // เปลี่ยนจาก 30000ms (30 วิ) เป็น 15000ms (15 วิ) สำหรับร้านค้าขนาดใหญ่
         }
 
         function onRecentLimitChange(val){
