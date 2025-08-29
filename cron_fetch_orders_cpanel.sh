@@ -49,8 +49,8 @@ cd "$SCRIPT_DIR" || {
 }
 
 # Fetch data for all platforms
-echo "📊 Fetching all platforms..." >> "$LOG_FILE"
-"$PHP_BIN" fetch_orders.php all --date="$(date +%Y-%m-%d)" >> "$LOG_FILE" 2>&1
+echo "📊 Fetching all platforms (last 1 hour)..." >> "$LOG_FILE"
+"$PHP_BIN" fetch_orders.php all --since=1h >> "$LOG_FILE" 2>&1
 
 # Check exit status
 EXIT_CODE=$?

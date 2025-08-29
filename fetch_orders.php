@@ -23,13 +23,25 @@ foreach ($argv as $arg) {
     }
 }
 
-$date_from = $options['from'] ?? $options['date'] ?? date('Y-m-d');
-$date_to = $options['to'] ?? $options['date'] ?? date('Y-m-d');
+$date_from = $options['from'] ?? null;
+$date_to = $options['to'] ?? null;
+$since = $options['since'] ?? null;
+
+// Handle --since parameter
+if ($since) {
+    $date_from = date('Y-m-d H:i:s', strtotime("-{$since}"));
+    $date_to = date('Y-m-d H:i:s');
+} elseif (!$date_from) {
+    // Default to today if no range is given
+    $date_from = date('Y-m-d 00:00:00');
+    $date_to = date('Y-m-d 23:59:59');
+}
+
 $max_orders = (int)($options['limit'] ?? 0); // 0 = ไม่จำกัด
 
 echo "🚀 Dashboard Market - Order Fetcher\n";
 echo "=====================================\n";
-echo "วันที่: {$date_from} ถึง {$date_to}\n";
+echo "ช่วงเวลา: {$date_from} ถึง {$date_to}\n";
 echo "Platform: " . ($platform === 'all' ? 'ทั้งหมด' : $platform) . "\n";
 if ($max_orders > 0) echo "จำกัด: {$max_orders} orders\n";
 echo "=====================================\n\n";

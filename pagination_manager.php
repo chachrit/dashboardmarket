@@ -62,8 +62,8 @@ class PaginationManager {
     public function fetchAllOrders($date_from = null, $date_to = null, $maxOrders = 0) {
         $startTime = microtime(true);
         
-        if (!$date_from) $date_from = date('Y-m-d');
-        if (!$date_to) $date_to = date('Y-m-d');
+        if (!$date_from) $date_from = date('Y-m-d H:i:s', strtotime('-1 day'));
+        if (!$date_to) $date_to = date('Y-m-d H:i:s');
         
         echo "🚀 เริ่มดึงข้อมูล {$this->platform} Orders: {$date_from} ถึง {$date_to}\n";
         
@@ -152,8 +152,8 @@ class PaginationManager {
      * ดึงข้อมูล Shopee หน้าเดียว
      */
     private function fetchShopeePage($date_from, $date_to, $limit, $cursor) {
-        $date_from_ts = strtotime($date_from . ' 00:00:00');
-        $date_to_ts = strtotime($date_to . ' 23:59:59');
+        $date_from_ts = is_numeric($date_from) ? $date_from : strtotime($date_from);
+        $date_to_ts = is_numeric($date_to) ? $date_to : strtotime($date_to);
         
         $query = [
             'time_from' => $date_from_ts,
@@ -217,8 +217,8 @@ class PaginationManager {
      * ดึงข้อมูล Lazada หน้าเดียว
      */
     private function fetchLazadaPage($date_from, $date_to, $limit, $offset) {
-        $date_from_iso = date('c', strtotime($date_from . ' 00:00:00'));
-        $date_to_iso = date('c', strtotime($date_to . ' 23:59:59'));
+        $date_from_iso = date('c', is_numeric($date_from) ? $date_from : strtotime($date_from));
+        $date_to_iso = date('c', is_numeric($date_to) ? $date_to : strtotime($date_to));
         
         $params = [
             'created_after' => $date_from_iso,
@@ -321,21 +321,20 @@ class PaginationManager {
      * ดึงข้อมูล Orders จากฐานข้อมูลเพื่อใช้ใน Dashboard
      */
     public function getOrdersFromDatabase($date_from = null, $date_to = null, $limit = 100) {
-        if (!$date_from) $date_from = date('Y-m-d');
-        if (!$date_to) $date_to = date('Y-m-d');
+        if (!$date_from) $date_from = date('Y-m-d 00:00:00');
+        if (!$date_to) $date_to = date('Y-m-d 23:59:59');
         
         $sql = "SELECT * FROM orders 
                 WHERE platform = ? 
-                AND created_at >= ? 
-                AND created_at <= ?
+                AND (created_at >= ? AND created_at <= ?)
                 ORDER BY created_at DESC 
                 LIMIT ?";
                 
         $stmt = $this->pdo->prepare($sql);
         $stmt->execute([
             $this->platform,
-            $date_from . ' 00:00:00',
-            $date_to . ' 23:59:59',
+            $date_from,
+            $date_to,
             $limit
         ]);
         
